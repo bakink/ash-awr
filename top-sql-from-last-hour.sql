@@ -10,3 +10,10 @@ SELECT activity_pct percent, db_time, h.sql_id, sq.SQL_TEXT
          ORDER BY count(*) DESC) h ,
          v$sql sq
          where h.sql_id=sq.sql_id(+)
+
+-- top SQL of a session
+  SELECT sql_id, COUNT (*)
+    FROM gv$active_session_history
+   WHERE inst_id = 2 AND session_id = 249 AND session_serial# = 24899
+GROUP BY sql_id
+ORDER BY 2 DESC
