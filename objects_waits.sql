@@ -1,5 +1,5 @@
 --https://gavinsoorma.com/2012/11/ash-and-awr-performance-tuning-scripts/
-
+--Which Database Objects Experienced the Most Number of Waits in the Past One Hour
 select * from 
 (
   select dba_objects.object_name,
