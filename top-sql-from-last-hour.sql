@@ -17,3 +17,26 @@ SELECT activity_pct percent, db_time, h.sql_id, sq.SQL_TEXT
    WHERE inst_id = 2 AND session_id = 249 AND session_serial# = 24899
 GROUP BY sql_id
 ORDER BY 2 DESC
+
+--Returns most active SQL in the past minute
+select sql_id, count(*),
+round(count(*)
+/sum(count(*)) over (), 2) pctload
+from v$active_session_history
+where sample_time > sysdate -
+1/24/60
+and session_type <> ‘BACKGROUND’
+group by sql_id
+order by count(*) desc;
+
+--ASH: Top IO SQL
+select ash.sql_id, count(*)
+from v$active_session_history ash,
+v$event_name evt
+where ash.sample_time > sysdate –
+1/24/60
+and ash.session_state = ‘WAITING’
+and ash.event_id = evt.event_id
+and evt.wait_class = ‘User I/O’
+group by sql_id
+order by count(*) desc;
