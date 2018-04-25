@@ -1,6 +1,11 @@
 
 --https://savvinov.com/2013/10/14/ash-basics/
 
+--Last 5 mins ASH data
+SELECT NVL(a.event, 'ON CPU') AS event, COUNT(*) AS total_wait_time FROM v$active_session_history a WHERE a.sample_time > SYSDATE - 5/(24*60) ---- 5 mins
+GROUP BY a.event ORDER BY total_wait_time DESC;
+********
+
 1. Current CPU usage by this instance
 
 select round(100*num_cpus_in_use/num_cpus_total,1) cpu_usage_pct
@@ -18,7 +23,7 @@ from
  from v$osstat
  where stat_name = 'NUM_CPUS'
 ) num_cpus;
-
+*********
 2. Top 5 events for an arbitrary interval
 
 This query returns information similar to “top 5 timed foreground events” in the AWR report, but with ASH you are free to choose any interval you like, rather than being limited by AWR snapshots.
