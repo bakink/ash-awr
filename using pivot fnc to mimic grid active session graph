@@ -1,0 +1,87 @@
+
+--https://ferhatsengonul.wordpress.com/2012/01/02/using-pivot-fnc-to-mimic-grid-active-session-graph/
+--version 1
+prompt ash_counts for last 1 minute
+column ON_CPU format 99999
+column Conc format 9999
+column UI/O format 9999
+column SI/O format 9999
+column Adm format 9999
+column Oth format 9999
+column Conf format 9999
+column Sche format 9999
+column CLST format 9999
+column App format 9999
+column Que format 9999
+column Idle format 9999
+column Ntw format 9999
+column Cmt format 9999
+column TOTAL format 99999
+ 
+select * from
+(select  ash.sql_id,nvl(EN.WAIT_CLASS,'ON_CPU') class from gv$active_Session_history ash, v$event_name en
+where ash.sample_time > sysdate - interval '60' second
+and  ash.SQL_ID is not NULL  and en.event# (+)=ash.event#
+UNION ALL
+select ash.sql_id,'TOTAL' from gv$active_Session_history ash
+where ash.sample_time > sysdate - interval '60' second
+and ash.sql_id is not null
+ )
+PIVOT (count(*)   FOR class IN ('ON_CPU' ON_CPU,'Concurrency' Conc,'User I/O' "UI/O",'System I/O' "SI/O",'Administrative' Adm,'Other' Oth,
+'Configuration' Conf ,'Scheduler' Sche,'Cluster' "CLST",'Application' App,'Queueing' Que,'Idle' Idle,'Network' Ntw,'Commit' Cmt ,'TOTAL' TOTAL))
+order by  TOTAL desc;
+
+--version 2
+prompt ash_counts for last &1 seconds
+undef ASH_SECS_PERCENT
+col ASH_SECS_PERCENT new_value ASH_SECS_PERCENT
+ 
+column ON_CPU format 999
+column Conc format 999
+column UIO format 999
+column SIO format 999
+column Adm format 999
+column Oth format 999
+column Conf format 999
+column Sche format 999
+column CLST format 999
+column App format 999
+column Que format 999
+column Idle format 999
+column Ntw format 999
+column Cmt format 999
+column TOTAL format 999
+ 
+select count(*) number_of_nodes,avg(value) number_of_threads,
+       &1 sample_secs, sum(value)*&1 ash_Secs,sum(value)*&1/100 AS ASH_SECS_PERCENT from gv$parameter where name='cpu_count';
+ 
+WITH ASH_SECS AS
+(select sql_id,
+ON_CPU,CONC,UIO,SIO, ADM, OTH, CONF, SCHE, CLST, APP, QUE, IDLE, NTW, CMT,
+ON_CPU+CONC+UIO+ SIO+ ADM+ OTH+ CONF+ SCHE+ CLST+ APP+ QUE+ IDLE+ NTW+ CMT total
+from
+(select ash.sql_id,nvl(EN.WAIT_CLASS,'ON_CPU') class from gv$active_Session_history ash, v$event_name en
+where ash.sample_time > sysdate - interval '&1' second
+and ash.SQL_ID is not NULL and en.event# (+)=ash.event#
+)
+PIVOT (count(*) FOR class IN ('ON_CPU' ON_CPU,'Concurrency' Conc,'User I/O' UIO,'System I/O' SIO,'Administrative' Adm,'Other' Oth,
+'Configuration' Conf ,'Scheduler' Sche,'Cluster' "CLST",'Application' App,'Queueing' Que,'Idle' Idle,'Network' Ntw,'Commit' Cmt )))
+    select sql_id,sum(ON_CPU)/&&ASH_SECS_PERCENT ON_CPU,sum(CONC)/&&ASH_SECS_PERCENT CONC,sum(UIO)/&&ASH_SECS_PERCENT UIO,sum(SIO)/&&ASH_SECS_PERCENT SIO, 
+    sum(ADM)/&&ASH_SECS_PERCENT ADM, sum(OTH)/&&ASH_SECS_PERCENT OTH , sum(CONF)/&&ASH_SECS_PERCENT CONF, sum(SCHE)/&&ASH_SECS_PERCENT SCHE,
+     sum(CLST)/&&ASH_SECS_PERCENT CLST , sum(APP)/&&ASH_SECS_PERCENT APP,sum(QUE)/&&ASH_SECS_PERCENT QUE, sum(IDLE)/&&ASH_SECS_PERCENT IDLE, 
+     sum(NTW)/&&ASH_SECS_PERCENT NTW, sum(CMT)/&&ASH_SECS_PERCENT CMT,sum(TOTAL)/&&ASH_SECS_PERCENT TOTAL from ash_secs
+    group by rollup(sql_id)
+    order by TOTAL desc;
+    
+-- v1.2
+select sql_id,
+ON_CPU,CONC,”UI/O”, “SI/O”, ADM, OTH, CONF, SCHE, CLST, APP, QUE, IDLE, NTW, CMT,
+ON_CPU+CONC+”UI/O”+ “SI/O”+ ADM+ OTH+ CONF+ SCHE+ CLST+ APP+ QUE+ IDLE+ NTW+ CMT total
+from
+(select ash.sql_id,nvl(EN.WAIT_CLASS,’ON_CPU’) class from gv$active_Session_history ash, v$event_name en
+where ash.sample_time > sysdate – interval ’60’ second
+and ash.SQL_ID is not NULL and en.event# (+)=ash.event#
+)
+PIVOT (count(*) FOR class IN (‘ON_CPU’ ON_CPU,’Concurrency’ Conc,’User I/O’ “UI/O”,’System I/O’ “SI/O”,’Administrative’ Adm,’Other’ Oth,
+‘Configuration’ Conf ,’Scheduler’ Sche,’Cluster’ “CLST”,’Application’ App,’Queueing’ Que,’Idle’ Idle,’Network’ Ntw,’Commit’ Cmt ))
+order by ON_CPU+CONC+”UI/O”+ “SI/O”+ ADM+ OTH+ CONF+ SCHE+ CLST+ APP+ QUE+ IDLE+ NTW+ CMT desc ;
