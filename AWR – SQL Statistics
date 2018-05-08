@@ -1,0 +1,980 @@
+--http://pawelchylinski.pl/2017/07/08/awr-sql-statistics/
+--AWR parameters
+column startup_time        format a30
+column begin_interval_time format a30
+column end_interval_time   format a30
+ 
+set linesize 300
+ 
+  SELECT sn.dbid,
+         sn.instance_number,
+         sn.snap_id,
+         sn.startup_time,
+         sn.begin_interval_time,
+         sn.end_interval_time
+    FROM dba_hist_snapshot sn
+ORDER BY dbid,
+         instance_number,
+         snap_id;
+         
+--SQL ordered by Elapsed Time         
+SET linesize 300
+SET pagesize 40
+set verify off
+COLUMN "SQL Module" format A10
+column "SQL Text" format A50
+COLUMN "PDB_NAME" format A2
+---your param---
+define dbid        = 1391944761
+define bid         = 112
+define eid         = 115
+define inst_num    = 1
+----------------
+define tsql_max    = 65
+define tsql_min    = 10
+define top_pct_sql = 1
+ 
+var dbtm number
+ 
+begin
+WITH dbtime AS (SELECT SUM(a.value) -lag(SUM(a.value)) over (order by snap_id)  dbtime  
+                 FROM dba_hist_service_stat a
+                 WHERE snap_id IN (&eid,&bid)
+                   AND a.stat_name = 'DB time'
+              GROUP BY a.snap_id)
+SELECT dbtime
+  into :dbtm
+  FROM dbtime
+ WHERE dbtime IS NOT NULL;
+end;
+/
+define dbtime = :dbtm
+ 
+with sqt as
+      (select elap, cput, exec, iowt, norm_val, sql_id, module, rnum, con_dbid
+         from (select sql_id, module, elap, norm_val, cput, exec, iowt, con_dbid,
+                      rownum rnum
+                 from (select sql_id
+                            , max(module) module
+                            , sum(elapsed_time_delta) elap
+                            , (100 * (sum(elapsed_time_delta) /
+                                      nullif(&dbtime,0))) norm_val
+                            , sum(cpu_time_delta) cput
+                            , sum(executions_delta) exec
+                            , sum(iowait_delta)     iowt
+                            , con_dbid
+                        from dba_hist_sqlstat
+                       where dbid = &dbid
+                         and instance_number = &inst_num
+                         and &bid < snap_id
+                         and snap_id <= &eid
+                       group by sql_id, con_dbid
+                       order by nvl(sum(elapsed_time_delta), -1) desc,
+                             sql_id, con_dbid))
+          where rnum < &tsql_max
+            and (rnum <= &tsql_min or norm_val > &top_pct_sql))
+    select /*+ NO_MERGE(sqt) */
+          nvl((sqt.elap/1000000), to_number(null)) "Elapsed Time(s)",
+          sqt.exec "Executions",
+          decode(sqt.exec, 0, to_number(null),(sqt.elap / sqt.exec / 1000000)) "Elapsed Time per Exec (s)",
+          sqt.norm_val "%Total",
+          decode(sqt.elap, 0, to_number(null), (100 * (sqt.cput / sqt.elap))) "%CPU",
+          decode(sqt.elap, 0, to_number(null), (100 * (sqt.iowt / sqt.elap))) "%IO",
+          sqt.sql_id  "SQL Id",
+          sqt.module  "SQL Module",
+          dbpdb.pdb_name,
+          st.sql_text "SQL Text"
+     from sqt, dba_hist_sqltext st,  (select p.con_dbid, p.pdb_name
+       from dba_hist_pdb_instance p,
+            (select pi.con_dbid, pi.instance_number, pi.startup_time,
+                    pi.open_time,
+                    rank() over (partition by pi.con_dbid
+                      order by pi.open_time desc, pi.instance_number asc) ord
+               from  dba_hist_pdb_instance pi, dba_hist_snapshot s
+              where pi.startup_time = s.startup_time
+                and pi.open_time < s.end_interval_time and pi.open_time >= s.startup_time
+                and s.dbid  = &dbid
+                and s.instance_number = &inst_num
+                and pi.dbid = s.dbid
+                and pi.instance_number = s.instance_number
+                and s.snap_id = &eid) mia
+      where p.dbid = &dbid
+        and p.instance_number = mia.instance_number
+        and p.startup_time = mia.startup_time
+        and p.open_time = mia.open_time
+        and mia.ord = 1)  dbpdb
+    where st.sql_id(+) = sqt.sql_id and st.dbid(+) = &dbid
+          and sqt.con_dbid = dbpdb.con_dbid(+)
+          and sqt.con_dbid = st.con_dbid(+)
+    order by sqt.rnum;
+    
+    -----    SQL ordered by CPU Time
+    SET linesize 300
+SET pagesize 40
+set verify off
+COLUMN "SQL Module" format A10
+column "SQL Text" format A50
+COLUMN "PDB_NAME" format A2
+ 
+---your param---
+define dbid        = 1391944761
+define bid         = 112
+define eid         = 115
+define inst_num    = 1
+----------------
+ 
+define tsql_max    = 65
+define tsql_min    = 10
+define top_pct_sql = 1
+ 
+var cpu number
+ 
+begin
+SELECT b.value - a.value
+  INTO :cpu
+  FROM dba_hist_sys_time_model a,
+       dba_hist_sys_time_model b
+ WHERE a.dbid = &dbid 
+   AND b.dbid = &dbid
+   AND a.instance_number = &inst_num
+   AND b.instance_number = &inst_num
+   AND a.snap_id = &bid
+   AND b.snap_id = &eid
+   AND a.stat_id = b.stat_id
+   AND a.stat_name = 'DB CPU'
+   AND b.value - a.value > 0;
+end;
+/
+define tcpu = :cpu
+ 
+with sqt as
+      (select elap, cput, exec, uiot, norm_val, sql_id, module, rnum, con_dbid
+         from (select sql_id, module, elap, norm_val, cput, exec, uiot, con_dbid,
+                      rownum rnum
+                 from (select sql_id
+                            , max(module) module
+                            , sum(elapsed_time_delta) elap
+                            , (100 * (sum(cpu_time_delta) /
+                                      nullif(&tcpu,0))) norm_val
+                            , sum(cpu_time_delta) cput
+                            , sum(executions_delta) exec
+                            , sum(iowait_delta)     uiot
+                            , con_dbid
+                        from dba_hist_sqlstat
+                       where dbid = &dbid
+                         and instance_number = &inst_num
+                         and &bid < snap_id
+                         and snap_id <= &eid
+                       group by (sql_id, con_dbid)
+                       order by nvl(sum(cpu_time_delta), -1) desc,
+                                sql_id, con_dbid))
+          where rnum < &tsql_max
+            and (rnum <= &tsql_min or norm_val > &top_pct_sql))
+    select /*+ NO_MERGE(sqt) */
+          nvl((sqt.cput/1000000), to_number(null)) "CPU Time(s)",
+          sqt.exec "Executions",
+          decode(sqt.exec, 0, to_number(null), (sqt.cput / sqt.exec /1000000)) "CPU per Exec (s)",
+          sqt.norm_val "%Total",
+          nvl((sqt.elap/1000000), to_number(null)) "Elapsed Time(s)",
+          decode(sqt.elap, 0, to_number(null), (100 * (sqt.cput / sqt.elap))) "%CPU",
+          decode(sqt.elap, 0, to_number(null), (100 * (sqt.uiot / sqt.elap))) "%IO",
+          sqt.sql_id  "SQL Id",
+          sqt.module  "SQL Module",
+          dbpdb.pdb_name,
+          st.sql_text "SQL Text"
+     from sqt, dba_hist_sqltext st,  (select p.con_dbid, p.pdb_name
+       from dba_hist_pdb_instance p,
+            (select pi.con_dbid, pi.instance_number, pi.startup_time,
+                    pi.open_time,
+                    rank() over (partition by pi.con_dbid
+                      order by pi.open_time desc, pi.instance_number asc) ord
+               from  dba_hist_pdb_instance pi, dba_hist_snapshot s
+              where pi.startup_time = s.startup_time
+                and pi.open_time < s.end_interval_time and pi.open_time >= s.startup_time
+                and s.dbid  = &dbid
+                and s.instance_number = &inst_num
+                and pi.dbid = s.dbid
+                and pi.instance_number = s.instance_number
+                and s.snap_id = &eid) mia
+      where p.dbid = &dbid
+        and p.instance_number = mia.instance_number
+        and p.startup_time = mia.startup_time
+        and p.open_time = mia.open_time
+        and mia.ord = 1)  dbpdb
+    where st.sql_id(+) = sqt.sql_id and st.dbid(+) = &dbid
+          and sqt.con_dbid = dbpdb.con_dbid(+)
+          and sqt.con_dbid = st.con_dbid(+)
+    order by sqt.rnum;
+    
+---SQL ordered by User I/O Wait Time
+   
+SET linesize 210
+SET pagesize 40
+SET VERIFY OFF
+COLUMN "SQL Module" format A10
+COLUMN "SQL Text" format A50
+COLUMN "PDB_NAME" format A2
+ 
+---your param---
+define dbid        = 1391944761
+define bid         = 112
+define eid         = 115
+define inst_num    = 1
+----------------
+ 
+define tsql_max    = 65
+define tsql_min    = 10
+define top_pct_sql = 1
+ 
+var iowt number
+ 
+begin
+SELECT SUM(e.time_waited_micro - nvl(b.time_waited_micro,0) )
+  INTO :iowt
+  FROM dba_hist_system_event b,
+       dba_hist_system_event e
+ WHERE b.snap_id (+) = &bid
+   AND e.snap_id = &eid
+   AND b.dbid (+) = e.dbid
+   AND e.dbid = &dbid 
+   AND b.instance_number (+) = e.instance_number
+   AND e.instance_number = &inst_num
+   AND b.event_id (+) = e.event_id
+   AND e.wait_class = 'User I/O';
+end;
+/
+define uiowt = :iowt
+ 
+with sqt as
+      (select elap, cput, exec, uiot, norm_val, sql_id, module, rnum, con_dbid
+         from (select sql_id, module, elap, norm_val, cput, exec, uiot, con_dbid,
+                      rownum rnum
+                 from (select sql_id
+                            , max(module) module
+                            , sum(elapsed_time_delta) elap
+                            , (100 * (sum(iowait_delta) /
+                                      nullif(&uiowt,0))) norm_val
+                            , sum(cpu_time_delta) cput
+                            , sum(executions_delta) exec
+                            , sum(iowait_delta)     uiot
+                            , con_dbid
+                        from dba_hist_sqlstat
+                       where dbid = &dbid
+                         and instance_number = &inst_num
+                         and &bid < snap_id
+                         and snap_id <= &eid
+                       group by sql_id, con_dbid
+                       order by nvl(sum(iowait_delta), -1) desc,
+                                sql_id, con_dbid))
+          where rnum < &tsql_max
+            and (rnum <= &tsql_min or norm_val > &top_pct_sql))
+    select /*+ NO_MERGE(sqt) */
+          nvl((sqt.uiot/1000000), to_number(null)) "User I/O Time (s)",
+          sqt.exec "Executions",
+          decode(sqt.exec, 0, to_number(null), (sqt.uiot / sqt.exec /1000000)) "UIO per Exec (s)",
+          sqt.norm_val "%Total",
+          nvl((sqt.elap/1000000), to_number(null)) "Elapsed Time(s)",
+          decode(sqt.elap, 0, to_number(null), (100 * (sqt.cput / sqt.elap))) "%CPU",
+          decode(sqt.elap, 0, to_number(null), (100 * (sqt.uiot / sqt.elap))) "%IO",
+          sqt.sql_id  "SQL Id",
+          sqt.module  "SQL Module",
+          dbpdb.pdb_name,
+          st.sql_text "SQL Text"
+     from sqt, dba_hist_sqltext st,  (select p.con_dbid, p.pdb_name
+       from dba_hist_pdb_instance p,
+            (select pi.con_dbid, pi.instance_number, pi.startup_time,
+                    pi.open_time,
+                    rank() over (partition by pi.con_dbid
+                      order by pi.open_time desc, pi.instance_number asc) ord
+               from  dba_hist_pdb_instance pi, dba_hist_snapshot s
+              where pi.startup_time = s.startup_time
+                and pi.open_time < s.end_interval_time and pi.open_time >= s.startup_time
+                and s.dbid  = &dbid
+                and s.instance_number = &inst_num
+                and pi.dbid = s.dbid
+                and pi.instance_number = s.instance_number
+                and s.snap_id = &eid) mia
+      where p.dbid = &dbid
+        and p.instance_number = mia.instance_number
+        and p.startup_time = mia.startup_time
+        and p.open_time = mia.open_time
+        and mia.ord = 1)  dbpdb
+    where st.sql_id(+) = sqt.sql_id and st.dbid(+) = &dbid
+          and sqt.con_dbid = dbpdb.con_dbid(+)
+          and sqt.con_dbid = st.con_dbid(+)
+    order by sqt.rnum;
+    
+---SQL ordered by Gets
+SET linesize 210
+SET pagesize 40
+SET VERIFY OFF
+COLUMN "SQL Module" format A10
+COLUMN "SQL Text" format A50
+COLUMN "PDB_NAME" format A2
+ 
+---your param---
+define dbid        = 1391944761
+define bid         = 112
+define eid         = 115
+define inst_num    = 1
+----------------
+ 
+define tsql_max    = 65
+define tsql_min    = 10
+define top_pct_sql = 1
+ 
+var lr number
+ 
+begin
+SELECT e.value - b.value
+  INTO :lr
+  FROM dba_hist_sysstat b,
+       dba_hist_sysstat e
+ WHERE b.snap_id =&bid
+    AND e.snap_id =&eid
+    AND b.dbid =&dbid
+    AND e.dbid =&dbid
+    AND b.instance_number =&inst_num
+    AND e.instance_number =&inst_num
+    AND b.stat_id = e.stat_id
+    AND e.stat_name = 'session logical reads'
+    AND e.value >= b.value
+    AND e.value > 0;
+ 
+end;
+/
+define slr = :lr
+ 
+with sqt as
+      (select elap, cput, exec, uiot, bget, norm_val, sql_id, module, rnum, con_dbid
+         from (select sql_id, module, elap, norm_val, cput, exec, uiot, con_dbid,
+                      bget, rownum rnum
+                 from (select sql_id
+                            , max(module) module
+                            , sum(elapsed_time_delta) elap
+                            , (100 * (sum(buffer_gets_delta) /
+                                      nullif(&slr,0))) norm_val
+                            , sum(cpu_time_delta) cput
+                            , sum(executions_delta) exec
+                            , sum(iowait_delta)     uiot
+                            , sum(buffer_gets_delta) bget
+                            , con_dbid
+                        from dba_hist_sqlstat
+                       where dbid = &dbid
+                         and instance_number = &inst_num
+                         and &bid < snap_id
+                         and snap_id <= &eid
+                       group by sql_id, con_dbid
+                       order by nvl(sum(buffer_gets_delta), -1) desc,
+                                sql_id, con_dbid))
+          where rnum < &tsql_max
+            and (rnum <= &tsql_min or norm_val > &top_pct_sql))
+    select /*+ NO_MERGE(sqt) */
+          sqt.bget "Buffer Gets",
+          sqt.exec "Executions",
+          decode(sqt.exec, 0, to_number(null), (sqt.bget / sqt.exec)) "UIO per Exec (s)",
+          sqt.norm_val "%Total",
+          nvl((sqt.elap/1000000), to_number(null)) "Elapsed Time(s)",
+          decode(sqt.elap, 0, '     ',
+             lpad(to_char(round((100 * (sqt.cput / sqt.elap)),1), 'TM9'),5)) "%CPU",
+          decode(sqt.elap, 0, '     ',
+             lpad(to_char(round((100 * (sqt.uiot / sqt.elap)),1), 'TM9'),5)) "%IO",
+          sqt.sql_id  "SQL Id",
+          sqt.module  "SQL Module",
+          dbpdb.pdb_name,
+          st.sql_text "SQL Text"
+     from sqt, dba_hist_sqltext st,  (select p.con_dbid, p.pdb_name
+       from dba_hist_pdb_instance p,
+            (select pi.con_dbid, pi.instance_number, pi.startup_time,
+                    pi.open_time,
+                    rank() over (partition by pi.con_dbid
+                      order by pi.open_time desc, pi.instance_number asc) ord
+               from  dba_hist_pdb_instance pi, dba_hist_snapshot s
+              where pi.startup_time = s.startup_time
+                and pi.open_time < s.end_interval_time and pi.open_time >= s.startup_time
+                and s.dbid  = &dbid
+                and s.instance_number = &inst_num
+                and pi.dbid = s.dbid
+                and pi.instance_number = s.instance_number
+                and s.snap_id = &eid) mia
+      where p.dbid = &dbid
+        and p.instance_number = mia.instance_number
+        and p.startup_time = mia.startup_time
+        and p.open_time = mia.open_time
+        and mia.ord = 1)  dbpdb
+    where st.sql_id(+) = sqt.sql_id and st.dbid(+) = &dbid
+          and sqt.con_dbid = dbpdb.con_dbid(+)
+          and sqt.con_dbid = st.con_dbid(+)
+    order by sqt.rnum;
+    
+--SQL ordered by Reads
+
+SET linesize 210
+SET pagesize 40
+SET VERIFY OFF
+COLUMN "SQL Module" format A10
+COLUMN "SQL Text" format A50
+COLUMN "PDB_NAME" format A2
+ 
+---your param---
+define dbid        = 1391944761
+define bid         = 112
+define eid         = 115
+define inst_num    = 1
+----------------
+ 
+define tsql_max    = 65
+define tsql_min    = 10
+define top_pct_sql = 1
+ 
+var pr number
+ 
+begin
+SELECT e.value - b.value
+  INTO :pr
+  FROM dba_hist_sysstat b,
+       dba_hist_sysstat e
+ WHERE b.snap_id =&bid
+    AND e.snap_id =&eid
+    AND b.dbid =&dbid
+    AND e.dbid =&dbid
+    AND b.instance_number =&inst_num
+    AND e.instance_number =&inst_num
+    AND b.stat_id = e.stat_id
+    AND e.stat_name = 'physical reads'
+    AND e.value >= b.value
+    AND e.value > 0;
+ 
+end;
+/
+define phyr = :pr
+ 
+with sqt as
+      (select elap, cput, exec, uiot, dskr,  norm_val, sql_id, module, rnum,
+              con_dbid
+         from (select sql_id, module, elap, norm_val, cput, exec, uiot,
+                      dskr, rownum rnum, con_dbid
+                 from (select sql_id
+                            , max(module) module
+                            , sum(elapsed_time_delta) elap
+                            , (100 * (sum(disk_reads_delta) /
+                                      nullif(&phyr,0))) norm_val
+                            , sum(cpu_time_delta) cput
+                            , sum(executions_delta) exec
+                            , sum(iowait_delta)     uiot
+                            , sum(disk_reads_delta) dskr
+                            , con_dbid
+                        from dba_hist_sqlstat
+                       where dbid = &dbid
+                         and instance_number = &inst_num
+                         and &bid < snap_id
+                         and snap_id <= &eid
+                       group by sql_id, con_dbid
+                       order by nvl(sum(disk_reads_delta), -1) desc,
+                                sql_id, con_dbid))
+          where rnum < &tsql_max
+            and (rnum <= &tsql_min or norm_val > &top_pct_sql))
+    select /*+ NO_MERGE(sqt) */
+          sqt.dskr "Physical Reads",
+          sqt.exec "Executions",
+          decode(sqt.exec, 0, to_number(null), (sqt.dskr / sqt.exec)) "Reads pers Exec",
+          sqt.norm_val "%Total",
+          nvl((sqt.elap / 1000000), to_number(null)) "Elapsed Time (s)",
+          decode(sqt.elap, 0, to_number(null), (100 * (sqt.cput / sqt.elap))) "%CPU",
+          decode(sqt.elap, 0, to_number(null), (100 * (sqt.uiot / sqt.elap))) "%IO",
+          sqt.sql_id  "SQL Id",
+          sqt.module  "SQL Module",
+          dbpdb.pdb_name,
+          st.sql_text "SQL Text"
+     from sqt, dba_hist_sqltext st,  (select p.con_dbid, p.pdb_name
+       from dba_hist_pdb_instance p,
+            (select pi.con_dbid, pi.instance_number, pi.startup_time,
+                    pi.open_time,
+                    rank() over (partition by pi.con_dbid
+                      order by pi.open_time desc, pi.instance_number asc) ord
+               from  dba_hist_pdb_instance pi, dba_hist_snapshot s
+              where pi.startup_time = s.startup_time
+                and pi.open_time < s.end_interval_time and pi.open_time >= s.startup_time
+                and s.dbid  = &dbid
+                and s.instance_number = &inst_num
+                and pi.dbid = s.dbid
+                and pi.instance_number = s.instance_number
+                and s.snap_id = &eid) mia
+      where p.dbid = &dbid
+        and p.instance_number = mia.instance_number
+        and p.startup_time = mia.startup_time
+        and p.open_time = mia.open_time
+        and mia.ord = 1)  dbpdb
+    where st.sql_id(+) = sqt.sql_id and st.dbid(+) = &dbid
+          and sqt.con_dbid = dbpdb.con_dbid(+)
+          and sqt.con_dbid = st.con_dbid(+)
+    order by sqt.rnum;
+
+--SQL ordered by Physical Reads (UnOptimized)
+
+SET linesize 210
+SET pagesize 40
+SET VERIFY OFF
+COLUMN "SQL Module" format A10
+COLUMN "SQL Text" format A50
+COLUMN "PDB_NAME" format A2
+ 
+---your param---
+define dbid        = 1391944761
+define bid         = 112
+define eid         = 115
+define inst_num    = 1
+----------------
+ 
+define tsql_max    = 65
+define tsql_min    = 10
+define top_pct_sql = 1
+ 
+var pr number
+ 
+begin
+SELECT e.value - b.value
+  INTO :pr
+  FROM dba_hist_sysstat b,
+       dba_hist_sysstat e
+ WHERE b.snap_id =&bid
+    AND e.snap_id =&eid
+    AND b.dbid =&dbid
+    AND e.dbid =&dbid
+    AND b.instance_number =&inst_num
+    AND e.instance_number =&inst_num
+    AND b.stat_id = e.stat_id
+    AND e.stat_name = 'physical read IO requests'
+    AND e.value >= b.value
+    AND e.value > 0;
+ 
+end;
+/
+define phydrq = :pr
+ 
+with sqt as
+      (select exec, pdr, prq, porq,  norm_val, sql_id, module, rnum, con_dbid
+         from (select sql_id, module, norm_val, exec, con_dbid,
+                      pdr, prq, porq, rownum rnum
+                 from (select sql_id
+                            , max(module) module
+                            , (100 * ((sum(physical_read_requests_delta)
+                                       - sum(optimized_physical_reads_delta)) /
+                                      nullif(&phydrq,0))) norm_val
+                            , sum(executions_delta) exec
+                            , sum(physical_read_requests_delta) -
+                              sum(optimized_physical_reads_delta) pdr
+                            , sum(physical_read_requests_delta) prq
+                            , sum(optimized_physical_reads_delta) porq
+                            , con_dbid
+                        from dba_hist_sqlstat
+                       where dbid = &dbid
+                         and instance_number = &inst_num
+                         and &bid < snap_id
+                         and snap_id <= &eid
+                       group by sql_id, con_dbid
+                       order by nvl(sum(physical_read_requests_delta)
+                                    - sum(optimized_physical_reads_delta), -1)
+                                desc, sql_id, con_dbid))
+          where rnum < &tsql_max
+            and (rnum <= &tsql_min or norm_val > &top_pct_sql))
+    select /*+ NO_MERGE(sqt) */
+          sqt.pdr "UnOptimized Reads Reqs",
+          sqt.prq "Physical Reads Reqs",
+          sqt.exec "Executions",
+          decode(sqt.exec, 0, to_number(null), (sqt.pdr/ sqt.exec)) "UnOptimized Reqs per Exec",
+          decode(sqt.prq, 0, to_number(null), (100 * (sqt.porq / sqt.prq))) "%Opt",
+          sqt.norm_val "%Total",
+          sqt.sql_id  "SQL Id",
+          sqt.module  "SQL Module",
+          dbpdb.pdb_name,
+          st.sql_text "SQL Text"
+     from sqt, dba_hist_sqltext st,  (select p.con_dbid, p.pdb_name
+       from dba_hist_pdb_instance p,
+            (select pi.con_dbid, pi.instance_number, pi.startup_time,
+                    pi.open_time,
+                    rank() over (partition by pi.con_dbid
+                      order by pi.open_time desc, pi.instance_number asc) ord
+               from  dba_hist_pdb_instance pi, dba_hist_snapshot s
+              where pi.startup_time = s.startup_time
+                and pi.open_time < s.end_interval_time and pi.open_time >= s.startup_time
+                and s.dbid  = &dbid
+                and s.instance_number = &inst_num
+                and pi.dbid = s.dbid
+                and pi.instance_number = s.instance_number
+                and s.snap_id = &eid) mia
+      where p.dbid = &dbid
+        and p.instance_number = mia.instance_number
+        and p.startup_time = mia.startup_time
+        and p.open_time = mia.open_time
+        and mia.ord = 1)  dbpdb
+    where st.sql_id(+) = sqt.sql_id and st.dbid(+) = &dbid
+          and sqt.con_dbid = dbpdb.con_dbid(+)
+          and sqt.con_dbid = st.con_dbid(+)
+    order by sqt.rnum;
+
+--SQL ordered by Executions
+
+SET linesize 210
+SET pagesize 40
+SET VERIFY OFF
+COLUMN "SQL Module" format A10
+COLUMN "SQL Text" format A50
+COLUMN "PDB_NAME" format A2
+ 
+---your param---
+define dbid        = 1391944761
+define bid         = 112
+define eid         = 115
+define inst_num    = 1
+----------------
+ 
+define tsql_max    = 65
+define tsql_min    = 10
+define top_pct_sql = 1
+ 
+var exec number
+ 
+begin
+SELECT e.value - b.value
+  INTO :exec
+  FROM dba_hist_sysstat b,
+       dba_hist_sysstat e
+ WHERE b.snap_id =&bid
+    AND e.snap_id =&eid
+    AND b.dbid =&dbid
+    AND e.dbid =&dbid
+    AND b.instance_number =&inst_num
+    AND e.instance_number =&inst_num
+    AND b.stat_id = e.stat_id
+    AND e.stat_name = 'execute count'
+    AND e.value >= b.value
+    AND e.value > 0;
+ 
+end;
+/
+define exe = :exec
+ 
+with sqt as
+      (select elap, cput, exec, uiot, rowp, sql_id, module, rnum, con_dbid
+         from (select sql_id, module, elap, rowp, cput, exec, uiot, con_dbid,
+                      rownum rnum
+                 from (select sql_id
+                            , max(module) module
+                            , sum(elapsed_time_delta) elap
+                            , sum(cpu_time_delta)     cput
+                            , sum(executions_delta)   exec
+                            , sum(iowait_delta)       uiot
+                            , sum(rows_processed_delta) rowp
+                            , con_dbid
+                        from dba_hist_sqlstat
+                       where dbid = &dbid
+                         and instance_number = &inst_num
+                         and &bid < snap_id
+                         and snap_id <= &eid
+                       group by sql_id, con_dbid
+                       order by nvl(sum(executions_delta), -1) desc,
+                                sql_id, con_dbid))
+          where rnum < &tsql_max
+            and (rnum <= &tsql_min or (100 * exec) / decode(&exe,0,NULL,&exe) > &top_pct_sql))
+    select /*+ NO_MERGE(sqt) */
+          sqt.exec "Executions",
+          sqt.rowp "Rows Processed",
+          decode(sqt.exec, 0, to_number(null), sqt.rowp / sqt.exec) "Rows per Exec",
+          nvl((sqt.elap / 1000000), to_number(null)) "Elapsed Time(s)",
+          decode(sqt.elap, 0, '     ',
+             lpad(to_char(round((100 * (sqt.cput / sqt.elap)),1), 'TM9'),5)) "%CPU",
+          decode(sqt.elap, 0, '     ',
+             lpad(to_char(round((100 * (sqt.uiot / sqt.elap)),1), 'TM9'),5)) "%IO",
+          sqt.sql_id  "SQL Id",
+          sqt.module  "SQL Module",
+          dbpdb.pdb_name,
+          st.sql_text "SQL Text"
+     from sqt, dba_hist_sqltext st,  (select p.con_dbid, p.pdb_name
+       from dba_hist_pdb_instance p,
+            (select pi.con_dbid, pi.instance_number, pi.startup_time,
+                    pi.open_time,
+                    rank() over (partition by pi.con_dbid
+                      order by pi.open_time desc, pi.instance_number asc) ord
+               from  dba_hist_pdb_instance pi, dba_hist_snapshot s
+              where pi.startup_time = s.startup_time
+                and pi.open_time < s.end_interval_time and pi.open_time >= s.startup_time
+                and s.dbid  = &dbid
+                and s.instance_number = &inst_num
+                and pi.dbid = s.dbid
+                and pi.instance_number = s.instance_number
+                and s.snap_id = &eid) mia
+      where p.dbid = &dbid
+        and p.instance_number = mia.instance_number
+        and p.startup_time = mia.startup_time
+        and p.open_time = mia.open_time
+        and mia.ord = 1)  dbpdb
+    where st.sql_id(+) = sqt.sql_id and st.dbid(+) = &dbid
+          and sqt.con_dbid = dbpdb.con_dbid(+)
+          and sqt.con_dbid = st.con_dbid(+)
+    order by sqt.rnum;
+
+--SQL ordered by Parse Calls
+SET linesize 210
+SET pagesize 40
+SET VERIFY OFF
+COLUMN "SQL Module" format A10
+COLUMN "SQL Text" format A50
+COLUMN "PDB_NAME" format A2
+ 
+---your param---
+define dbid        = 1391944761
+define bid         = 112
+define eid         = 115
+define inst_num    = 1
+----------------
+ 
+define tsql_max    = 65
+define tsql_min    = 10
+define top_pct_sql = 1
+ 
+var parsec number
+ 
+begin
+SELECT e.value - b.value
+  INTO :parsec
+  FROM dba_hist_sysstat b,
+       dba_hist_sysstat e
+ WHERE b.snap_id =&bid
+    AND e.snap_id =&eid
+    AND b.dbid =&dbid
+    AND e.dbid =&dbid
+    AND b.instance_number =&inst_num
+    AND e.instance_number =&inst_num
+    AND b.stat_id = e.stat_id
+    AND e.stat_name = 'parse count (total)'
+    AND e.value >= b.value
+    AND e.value > 0;
+ 
+end;
+/
+define prse = :parsec
+ 
+with sqt as
+      (select exec, prsc, norm_val, sql_id, module, rnum, con_dbid
+         from (select sql_id, module, norm_val, exec, prsc, rownum rnum, con_dbid
+                 from (select sql_id
+                            , max(module) module
+                            , (100 * (sum(parse_calls_delta) /
+                                      nullif(&prse,0))) norm_val
+                            , sum(executions_delta)  exec
+                            , sum(parse_calls_delta) prsc
+                            , con_dbid
+                        from dba_hist_sqlstat
+                       where dbid = &dbid
+                         and instance_number = &inst_num
+                         and &bid < snap_id
+                         and snap_id <= &eid
+                       group by sql_id, con_dbid
+                       order by nvl(sum(parse_calls_delta), -1) desc,
+                                sql_id, con_dbid))
+          where rnum < &tsql_max
+            and (rnum <= &tsql_min or norm_val > &top_pct_sql))
+    select /*+ NO_MERGE(sqt) */
+          sqt.prsc "Parse Calls",
+          sqt.exec "Executions",
+          sqt.norm_val "%Total Parses",
+          sqt.sql_id  "SQL Id",
+          sqt.module  "SQL Module",
+          dbpdb.pdb_name,
+          st.sql_text "SQL Text"
+     from sqt, dba_hist_sqltext st,  (select p.con_dbid, p.pdb_name
+       from dba_hist_pdb_instance p,
+            (select pi.con_dbid, pi.instance_number, pi.startup_time,
+                    pi.open_time,
+                    rank() over (partition by pi.con_dbid
+                      order by pi.open_time desc, pi.instance_number asc) ord
+               from  dba_hist_pdb_instance pi, dba_hist_snapshot s
+              where pi.startup_time = s.startup_time
+                and pi.open_time < s.end_interval_time and pi.open_time >= s.startup_time
+                and s.dbid  = &dbid
+                and s.instance_number = &inst_num
+                and pi.dbid = s.dbid
+                and pi.instance_number = s.instance_number
+                and s.snap_id = &eid) mia
+      where p.dbid = &dbid
+        and p.instance_number = mia.instance_number
+        and p.startup_time = mia.startup_time
+        and p.open_time = mia.open_time
+        and mia.ord = 1)  dbpdb
+    where st.sql_id(+) = sqt.sql_id and st.dbid(+) = &dbid
+          and sqt.con_dbid = dbpdb.con_dbid(+)
+          and sqt.con_dbid = st.con_dbid(+)
+    order by sqt.rnum;
+
+--SQL ordered by Sharable Memory
+
+SET linesize 210
+SET pagesize 40
+SET VERIFY OFF
+COLUMN "SQL Module" format A10
+COLUMN "SQL Text" format A50
+COLUMN "PDB_NAME" format A2
+ 
+---your param---
+define dbid        = 1391944761
+define bid         = 112
+define eid         = 115
+define inst_num    = 1
+----------------
+ 
+define tsql_max    = 65
+define tsql_min    = 10
+define top_pct_sql = 1
+ 
+var spm number
+ 
+begin
+SELECT MAX(VALUE)
+  INTO :spm
+  FROM DBA_HIST_PARAMETER 
+ WHERE SNAP_ID = &eid 
+   AND DBID = &dbid 
+   AND INSTANCE_NUMBER =&inst_num 
+   AND PARAMETER_NAME ='__shared_pool_size';
+end;
+/
+define espm = :spm
+define shmem_thres = 1048576
+ 
+with sqt as
+      (select exec, sharable_mem, sql_id, module, rnum, con_dbid
+         from (select sql_id, module, exec, sharable_mem,
+                      rownum rnum, con_dbid
+                 from
+                 (select sql_id, module, exec, sharable_mem, con_dbid
+                    from
+                        (select sharable_mem, sql_id, con_dbid
+                           from dba_hist_sqlstat
+                          where dbid = &dbid
+                            and snap_id = &eid
+                            and instance_number = &inst_num
+                            and sharable_mem > &shmem_thres) y
+                      left outer join
+                        (select sql_id, con_dbid
+                               , max(module) module
+                               , sum(executions_delta)  exec
+                           from dba_hist_sqlstat
+                          where dbid = &dbid
+                            and instance_number = &inst_num
+                            and &bid < snap_id
+                            and snap_id <= &eid
+                       group by sql_id, con_dbid) x
+                       using (sql_id, con_dbid)
+               order by nvl(sharable_mem, -1) desc, sql_id, con_dbid))
+       where rnum <= &tsql_max)
+    select /*+ NO_MERGE(sqt) */
+          sqt.sharable_mem "Sharable Mem(b)",
+          sqt.exec "Executions",
+          decode(&espm, 0, 0, 100 * sqt.sharable_mem/&espm) "%Total",
+          sqt.sql_id  "SQL Id",
+          sqt.module  "SQL Module",
+          dbpdb.pdb_name,
+          st.sql_text "SQL Text"
+     from sqt, dba_hist_sqltext st,  (select p.con_dbid, p.pdb_name
+       from dba_hist_pdb_instance p,
+            (select pi.con_dbid, pi.instance_number, pi.startup_time,
+                    pi.open_time,
+                    rank() over (partition by pi.con_dbid
+                      order by pi.open_time desc, pi.instance_number asc) ord
+               from  dba_hist_pdb_instance pi, dba_hist_snapshot s
+              where pi.startup_time = s.startup_time
+                and pi.open_time < s.end_interval_time and pi.open_time >= s.startup_time
+                and s.dbid  = &dbid
+                and s.instance_number = &inst_num
+                and pi.dbid = s.dbid
+                and pi.instance_number = s.instance_number
+                and s.snap_id = &eid) mia
+      where p.dbid = &dbid
+        and p.instance_number = mia.instance_number
+        and p.startup_time = mia.startup_time
+        and p.open_time = mia.open_time
+        and mia.ord = 1)  dbpdb
+    where st.sql_id(+) = sqt.sql_id and st.dbid(+) = &dbid
+          and sqt.con_dbid = dbpdb.con_dbid(+)
+          and sqt.con_dbid = st.con_dbid(+)
+    order by sqt.rnum;
+
+--SQL ordered by Version Count
+
+SET linesize 210
+SET pagesize 40
+SET VERIFY OFF
+COLUMN "SQL Module" format A10
+COLUMN "SQL Text" format A50
+COLUMN "PDB_NAME" format A2
+ 
+---your param---
+define dbid        = 1391944761
+define bid         = 112
+define eid         = 115
+define inst_num    = 1
+----------------
+ 
+define vcnt_thres  = 20
+define tsql_max    = 65
+define tsql_min    = 10
+define top_pct_sql = 1
+ 
+with sqt as
+      (select exec, version_count, sql_id, module, rnum, con_dbid
+        from (select sql_id, module, exec, version_count,
+                      rownum rnum, con_dbid
+         from (select sql_id, module, exec, version_count, con_dbid
+                 from
+                     (select version_count, sql_id, con_dbid
+                        from dba_hist_sqlstat
+                       where dbid = &dbid
+                         and snap_id = &eid
+                         and instance_number = &inst_num
+                         and version_count > &vcnt_thres) y
+                   left outer join
+                     (select sql_id, con_dbid
+                            , max(module) module
+                            , sum(executions_delta)  exec
+                        from dba_hist_sqlstat
+                       where dbid = &dbid
+                         and instance_number = &inst_num
+                         and &bid < snap_id
+                         and snap_id <= &eid
+                       group by sql_id, con_dbid) x
+                     using (sql_id, con_dbid)
+               order by nvl(y.version_count, -1) desc, sql_id, con_dbid))
+       where rnum <= &tsql_max)
+    select /*+ NO_MERGE(sqt) */
+           sqt.version_count "Version Count",
+          sqt.exec "Executions",
+          sqt.sql_id  "SQL Id",
+          sqt.module  "SQL Module",
+          dbpdb.pdb_name,
+          st.sql_text "SQL Text"
+     from sqt, dba_hist_sqltext st,  (select p.con_dbid, p.pdb_name
+       from dba_hist_pdb_instance p,
+            (select pi.con_dbid, pi.instance_number, pi.startup_time,
+                    pi.open_time,
+                    rank() over (partition by pi.con_dbid
+                      order by pi.open_time desc, pi.instance_number asc) ord
+               from  dba_hist_pdb_instance pi, dba_hist_snapshot s
+              where pi.startup_time = s.startup_time
+                and pi.open_time < s.end_interval_time and pi.open_time >= s.startup_time
+                and s.dbid  = &dbid
+                and s.instance_number = &inst_num
+                and pi.dbid = s.dbid
+                and pi.instance_number = s.instance_number
+                and s.snap_id = &eid) mia
+      where p.dbid = &dbid
+        and p.instance_number = mia.instance_number
+        and p.startup_time = mia.startup_time
+        and p.open_time = mia.open_time
+        and mia.ord = 1)  dbpdb
+    where st.sql_id(+) = sqt.sql_id and st.dbid(+) = &dbid
+          and sqt.con_dbid = dbpdb.con_dbid(+)
+          and sqt.con_dbid = st.con_dbid(+)
+    order by sqt.rnum;
+
+
