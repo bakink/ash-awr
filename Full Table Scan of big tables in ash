@@ -1,0 +1,13 @@
+--http://orabase.org/index.php/2018/05/14/how-to-find-fts-of-big-tables-in-ash/
+
+with ash_fts as (
+select u.username, ash.sql_id,ash.sql_plan_hash_value,ash.sql_plan_line_id from v$active_session_history ash
+    join dba_users u  on ash.user_id=u.user_id
+    where ash.sql_plan_operation='TABLE ACCESS' and ash.sql_plan_options='FULL'
+    group by u.username, ash.sql_id,ash.sql_plan_hash_value,ash.sql_plan_line_id)                            
+    , big_tables as (  select owner,segment_name,sum(bytes)/1024/1024 as MB_SIZE from dba_segments 
+   group by segment_name,owner
+    having sum(bytes)/1024/1024 > 2048) 
+ select ash.sql_id, b.owner,hsp.object_name from dba_hist_sql_plan hsp
+    join ash_fts ash on ash.sql_plan_line_id=hsp.id and ash.sql_id=hsp.sql_id and ash.sql_plan_hash_value=hsp.plan_hash_value
+    join big_tables b on b.segment_name=hsp.object_name ;   
