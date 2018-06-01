@@ -1,0 +1,7 @@
+--http://meravkedem.blogspot.com/2011/04/understanding-in-which-execution-plan.html
+
+select sql_plan_operation operation, sql_plan_options options, sql_plan_line_id line_id, current_obj# obj#, event, count(*)
+from v$active_session_history
+where sql_id='b652k1fnuqz5w'
+and sql_plan_hash_value=406502908
+group by sql_plan_operation, sql_plan_options, sql_plan_line_id, current_obj#,event;  
