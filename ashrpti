@@ -1,0 +1,14 @@
+--How to Determine the SQL Statements Executed by a Blocking Session in the Past Using Active Session History (ASH) Report (Doc ID 2406026.1)
+--https://subhanuddinkhadri.blogspot.com/2015/12/how-to-generate-ash-report.html
+
+* target_session_id
+* target_sql_id
+* target_wait_class
+* target_service_hash
+* target_module_name
+* target_action_name
+* target_client_id
+* target_plsql_entry
+
+DEFINE target_session_id=1419
+@?/rdbms/admin/ashrpti
