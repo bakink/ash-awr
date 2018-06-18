@@ -1,0 +1,82 @@
+--https://connor-mcdonald.com/2017/12/12/iash-my-infinite-ash-routine/
+
+  create table ash_hist 
+   partition by range (sample_time) 
+   interval( numtodsinterval(1,'day')) 
+   (partition p1 values less than (timestamp' 2017-01-01 00:00:00')) 
+   as select * from sys.gv_$active_session_history; 
+ 
+ CREATE OR REPLACE procedure save_ash_hist is 
+ l_hi_val_as_string varchar2(1000); 
+ l_hi_val_as_date date; 
+ l_max_recorded timestamp; 
+ l_retention number := 90; 
+ 
+ begin 
+ dbms_application_info.set_module('$$SAVE_ASH$$',''); 
+ -- we are looping to take advantage 
+ -- of partition elimination 
+ 
+ for i in 0 .. 10 loop 
+ select max(sample_time) 
+ into l_max_recorded 
+ from ash_hist 
+ where sample_time > systimestamp - i; 
+ 
+ exit when l_max_recorded is not null; 
+ end loop; 
+ 
+ if l_max_recorded is null then 
+ raise_application_error(-20000,'No max sample time with 10 days'); 
+ end if; 
+ dbms_output.put_line('Last copied time was '||l_max_recorded); 
+ 
+ insert /*+ append */ into ash_hist 
+ select * 
+ from sys.gv_$active_session_history 
+ where sample_time > l_max_recorded 
+ and ( module != '$$SAVE_ASH$$' or module is null ); 
+ dbms_output.put_line('Copied '||sql%rowcount||' rows'); 
+ commit; 
+ 
+ if to_char(sysdate,'DYHH24') between 'TUE01' and 'TUE06' then 
+ 
+ begin 
+ execute immediate 'alter table ash_hist set interval ()'; 
+ exception 
+ when others then null; 
+ end; 
+ execute immediate 'alter table ash_hist set interval (NUMTODSINTERVAL(1,''DAY''))'; 
+ 
+ for i in ( select * 
+ from user_tab_partitions 
+ where table_name = 'ASH_HIST' 
+ and partition_position > 1 
+ order by partition_position ) 
+ loop 
+ l_hi_val_as_string := i.high_value; 
+ execute immediate 'select '||l_hi_val_as_string||'  from dual' into l_hi_val_as_date; 
+ 
+ if l_hi_val_as_date < sysdate - l_retention then 
+ execute immediate 'alter table ash_hist drop partition '||i.partition_name; 
+ else 
+ exit; 
+ end if; 
+ 
+ end loop; 
+ end if; 
+ end; 
+ / 
+
+
+BEGIN 
+ dbms_scheduler.create_job ( 
+ job_name => 'ASH_CAPTURE', 
+ job_type => 'PLSQL_BLOCK', 
+ job_action => 'save_ash_hist;', 
+ start_date => CAST((TRUNC(SYSDATE,'HH') + (1/24) + (55/24/60)) AS TIMESTAMP), -- job commences at 55 mins past the next hour 
+ repeat_interval => 'FREQ=HOURLY;  INTERVAL=2', 
+ enabled => true, 
+ comments => 'Permanent record of ASH data'); 
+END; 
+ / 
