@@ -6,3 +6,26 @@ where sql_id='b652k1fnuqz5w'
 and sql_plan_hash_value=406502908
 group by sql_plan_operation, sql_plan_options, sql_plan_line_id, current_obj#,event
 order by count(*) desc;
+
+--https://savvinov.com/2013/10/14/ash-basics/
+--This query tells where in the plan a certain SQL statement is spending most of its time, 
+--which is very useful for troubleshooting SQL retrospectively if SQL real-time monitor information is not available.
+
+SELECT ash.sql_plan_line_id,
+       ash.sql_plan_operation,
+       ash.sql_plan_options,
+       p.object_name,
+       round(100*COUNT(*)/
+          sum(count(1)) over(), 2) "% time"
+FROM v$active_session_history ash,
+        v$sql_plan p
+WHERE ash.sql_id = p.sql_id
+AND ash.sql_plan_hash_value = p.plan_hash_value
+AND ash.sql_plan_line_id = P.id
+AND ash.sql_id = :sql_id
+AND ash.sql_plan_hash_value = :plan_hash_value
+GROUP BY ASH.SQL_PLAN_LINE_ID,
+         ASH.SQL_PLAN_OPERATION,
+         ASH.SQL_PLAN_OPTIONS,
+         p.object_name
+ORDER BY count(*) DESC;
