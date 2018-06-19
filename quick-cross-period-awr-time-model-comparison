@@ -1,0 +1,285 @@
+--https://orastory.wordpress.com/2015/10/15/quick-cross-period-awr-time-model-comparison/
+--https://timurakhmadeev.wordpress.com/2014/02/20/averages/
+
+WITH subq_snaps AS
+(SELECT dbid                dbid
+ ,      instance_number     inst
+ ,      snap_id             e_snap
+ ,      lag(snap_id) over (partition by instance_number, startup_time order by snap_id) b_snap
+ ,      TO_CHAR(begin_interval_time,'D') b_day
+ ,      TO_CHAR(begin_interval_time,'DD-MON-YYYY HH24:MI') b_time
+ ,      TO_CHAR(end_interval_time,'HH24:MI')   e_time
+ ,    ((extract(day    from (end_interval_time - begin_interval_time))*86400)
+     + (extract(hour   from (end_interval_time - begin_interval_time))*3600)
+     + (extract(minute from (end_interval_time - begin_interval_time))*60)
+     + (extract(second from (end_interval_time - begin_interval_time)))) duration
+ FROM   dba_hist_snapshot)
+SELECT ss.inst
+,      ss.b_snap
+,      ss.e_snap
+,      ss.b_time
+,      ss.e_time
+,      TO_CHAR(ROUND(MAX(CASE WHEN bm.stat_name = 'DB time' THEN em.value - bm.value END)/1000000/60,2),'999999990.99')                                  db_time
+,      TO_CHAR(ROUND(MAX(CASE WHEN bm.stat_name = 'DB time' THEN em.value - bm.value END)/(ss.duration*1000000),1),'999999990.99')        aas
+,      (SELECT round(average,2)
+        FROM   dba_hist_sysmetric_summary sm
+        WHERE  sm.dbid            = ss.dbid
+        AND    sm.snap_id         = ss.e_snap
+        AND    sm.instance_number = ss.inst
+        AND    sm.metric_name     = 'Average Synchronous Single-Block Read Latency'
+        AND    sm.group_id        = 2)                                                                                                                   assbl
+,      (SELECT round(average,2)
+FROM   dba_hist_sysmetric_summary sm
+WHERE  sm.dbid            = ss.dbid
+AND    sm.snap_id         = ss.e_snap
+AND    sm.instance_number = ss.inst
+AND    sm.metric_name     = 'Host CPU Utilization (%)'
+AND    sm.group_id        = 2)                                                                                                                   cpu_util
+,      TO_CHAR(ROUND(MAX(CASE WHEN bm.stat_name = 'DB CPU' THEN em.value - bm.value END)/1000000,2),'999999990.99')                                      db_cpu
+,      TO_CHAR(ROUND(MAX(CASE WHEN bm.stat_name = 'sql execute elapsed time' THEN em.value - bm.value END)/1000000,2),'999999990.99')                    sql_time
+,      TO_CHAR(ROUND(MAX(CASE WHEN bm.stat_name = 'PL/SQL execution elapsed time' THEN em.value - bm.value END)/1000000,2),'999999990.99')               plsql_time
+,      TO_CHAR(ROUND(MAX(CASE WHEN bm.stat_name = 'parse time elapsed' THEN em.value - bm.value END)/1000000,2),'999999990.00')                          parse_time
+,      TO_CHAR(ROUND(MAX(CASE WHEN bm.stat_name = 'failed parse elapsed time' THEN em.value - bm.value END)/1000000,2),'999999990.99')                   failed_parse
+,      TO_CHAR(ROUND(MAX(CASE WHEN bm.stat_name = 'hard parse (sharing criteria) elapsed time' THEN em.value - bm.value END)/1000000,2),'999999990.99')  hard_parse_sharing
+,      TO_CHAR(ROUND(MAX(CASE WHEN bm.stat_name = 'RMAN cpu time (backup/restore)' THEN em.value - bm.value END)/1000000,2),'999999990.99')              rman_cpu
+,      TO_CHAR(ROUND(MAX(CASE WHEN bm.stat_name = 'connection management call elapsed time' THEN em.value - bm.value END)/1000000,2),'999999990.99')     connection_mgmt
+,      TO_CHAR(ROUND(MAX(CASE WHEN bm.stat_name = 'sequence load elapsed time' THEN em.value - bm.value END)/1000000,2),'999999990.99')                  sequence_load
+,      TO_CHAR(ROUND(100*MAX(CASE WHEN bm.stat_name = 'DB CPU' THEN em.value - bm.value END)
+           / NULLIF(MAX(CASE WHEN bm.stat_name = 'DB time' THEN em.value - bm.value END),0),2),'999999990.99')                                           db_cpu_perc
+,      TO_CHAR(ROUND(100*MAX(CASE WHEN bm.stat_name = 'sql execute elapsed time' THEN em.value - bm.value END)
+           / NULLIF(MAX(CASE WHEN bm.stat_name = 'DB time' THEN em.value - bm.value END),0),2),'999999990.99')                                           sql_time_perc
+,      TO_CHAR(ROUND(MAX(CASE WHEN bm.stat_name = 'PL/SQL execution elapsed time' THEN em.value - bm.value END)
+           / NULLIF(MAX(CASE WHEN bm.stat_name = 'DB time' THEN em.value - bm.value END),0),2),'999999990.99')                                           plsql_time_perc
+,      TO_CHAR(ROUND(MAX(CASE WHEN bm.stat_name = 'parse time elapsed' THEN em.value - bm.value END)
+           / NULLIF(MAX(CASE WHEN bm.stat_name = 'DB time' THEN em.value - bm.value END),0),2),'999999990.99')                                           parse_time_perc
+,      TO_CHAR(ROUND(MAX(CASE WHEN bm.stat_name = 'failed parse elapsed time' THEN em.value - bm.value END)
+           / NULLIF(MAX(CASE WHEN bm.stat_name = 'DB time' THEN em.value - bm.value END),0),2),'999999990.99')                                           failed_parse_perc
+,      TO_CHAR(ROUND(MAX(CASE WHEN bm.stat_name = 'hard parse (sharing criteria) elapsed time' THEN em.value - bm.value END)
+           / NULLIF(MAX(CASE WHEN bm.stat_name = 'DB time' THEN em.value - bm.value END),0),2),'999999990.99')                                           hard_parse_sharing_perc
+,      TO_CHAR(ROUND(MAX(CASE WHEN bm.stat_name = 'RMAN cpu time (backup/restore)' THEN em.value - bm.value END)
+           / NULLIF(MAX(CASE WHEN bm.stat_name = 'DB time' THEN em.value - bm.value END),0),2),'999999990.99')                                           rman_cpu_perc
+FROM  subq_snaps              ss
+,     dba_hist_sys_time_model em
+,     dba_hist_sys_time_model bm
+WHERE bm.dbid                   = ss.dbid
+AND   bm.snap_id                = ss.b_snap
+AND   bm.instance_number        = ss.inst
+AND   em.dbid                   = ss.dbid
+AND   em.snap_id                = ss.e_snap
+AND   em.instance_number        = ss.inst
+AND   bm.stat_id                = em.stat_id
+GROUP BY
+       ss.dbid
+,      ss.inst
+,      ss.b_day
+,      ss.b_snap
+,      ss.e_snap
+,      ss.b_time
+,      ss.e_time
+,      ss.duration
+--HAVING b_day NOT IN (6,7)
+--AND    inst = 2
+--AND b_snap = 18673
+--AND    e_time = '17:00'
+ORDER BY b_snap DESC;
+
+--Also, similar query for comparing the different IO metrics.
+--Again should match numbers in AWR.
+
+WITH subq_snaps AS
+(SELECT dbid                dbid
+ ,      instance_number     inst
+ ,      snap_id             e_snap
+ ,      lag(snap_id) over (partition by instance_number, startup_time order by snap_id) b_snap
+ ,      TO_CHAR(begin_interval_time,'D') b_day
+ ,      TO_CHAR(begin_interval_time,'DD-MON-YYYY HH24:MI') b_time
+ ,      TO_CHAR(end_interval_time,'HH24:MI')   e_time
+ ,    ((extract(day    from (end_interval_time - begin_interval_time))*86400)
+     + (extract(hour   from (end_interval_time - begin_interval_time))*3600)
+     + (extract(minute from (end_interval_time - begin_interval_time))*60)
+     + (extract(second from (end_interval_time - begin_interval_time)))) duration
+ FROM   dba_hist_snapshot)
+,    io_stats AS
+(SELECT ss.*
+ ,      bv.event_name
+ ,      ev.time_waited_micro_fg - bv.time_waited_micro_fg time_waited_micro
+ ,      ev.total_waits_fg       - bv.total_waits_fg       waits
+ FROM   subq_snaps            ss
+ ,      dba_hist_system_event bv
+ ,      dba_hist_system_event ev
+ WHERE  bv.dbid                   = ss.dbid
+ AND    bv.snap_id                = ss.b_snap
+ AND    bv.instance_number        = ss.inst
+ AND    bv.event_name            IN ('db file sequential read','direct path read','direct path read temp','db file scattered read','db file parallel read')
+ AND    ev.dbid                   = ss.dbid
+ AND    ev.snap_id                = ss.e_snap
+ AND    ev.instance_number        = ss.inst
+ AND    ev.event_id               = bv.event_id)
+SELECT io.dbid
+,      io.inst
+,      io.b_snap
+,      io.e_snap
+,      io.b_time
+,      io.e_time
+,      (SELECT ROUND(average,2)
+        FROM   dba_hist_sysmetric_summary sm
+        WHERE  sm.dbid            = io.dbid
+        AND    sm.snap_id         = io.e_snap
+        AND    sm.instance_number = io.inst
+        AND    sm.metric_name     = 'Average Synchronous Single-Block Read Latency'
+        AND    sm.group_id        = 2) assbl
+,      MAX(CASE WHEN event_name = 'db file sequential read' THEN ROUND(CASE WHEN waits < 0 THEN NULL ELSE waits END) END) single_waits
+,      MAX(CASE WHEN event_name = 'db file scattered read'  THEN ROUND(CASE WHEN waits < 0 THEN NULL ELSE waits END) END) multi_waits
+,      MAX(CASE WHEN event_name = 'db file parallel read'   THEN ROUND(CASE WHEN waits < 0 THEN NULL ELSE waits END) END) prefch_wait
+,      MAX(CASE WHEN event_name = 'direct path read'        THEN ROUND(CASE WHEN waits < 0 THEN NULL ELSE waits  END) END) direct_waits
+,      MAX(CASE WHEN event_name = 'direct path read temp'   THEN ROUND(CASE WHEN waits < 0 THEN NULL ELSE waits END) END)  temp_waits
+,      MAX(CASE WHEN event_name = 'db file sequential read' THEN ROUND(CASE WHEN waits < 0 THEN NULL ELSE waits END/duration) END) iops_single
+,      MAX(CASE WHEN event_name = 'db file sequential read' THEN ROUND(CASE WHEN time_waited_micro/1000/1000 < 0 THEN NULL ELSE time_waited_micro/1000/1000 END) END) single_secs_total
+,      MAX(CASE WHEN event_name = 'db file sequential read' THEN ROUND((time_waited_micro/1000)/NULLif(waits,0)) END) single_avg
+,      MAX(CASE WHEN event_name = 'db file scattered read'  THEN ROUND(CASE WHEN waits < 0 THEN NULL ELSE waits END/duration) END) iops_multi
+,      MAX(CASE WHEN event_name = 'db file scattered read'  THEN ROUND(CASE WHEN time_waited_micro/1000/1000 < 0 THEN NULL ELSE time_waited_micro/1000/1000 END) END) multi_secs_total
+,      MAX(CASE WHEN event_name = 'db file scattered read'  THEN ROUND((time_waited_micro/1000)/NULLif(waits,0)) END) multi_avg
+,      MAX(CASE WHEN event_name = 'db file parallel read'   THEN ROUND(CASE WHEN waits < 0 THEN NULL ELSE waits END/duration) END) iops_prefch
+,      MAX(CASE WHEN event_name = 'db file parallel read'   THEN ROUND(CASE WHEN time_waited_micro/1000/1000 < 0 THEN NULL ELSE time_waited_micro/1000/1000 END) END) prefch_secs_total
+,      MAX(CASE WHEN event_name = 'db file parallel read'   THEN ROUND((time_waited_micro/1000)/NULLif(waits,0)) END) prefch_avg
+,      MAX(CASE WHEN event_name = 'direct path read'        THEN ROUND(CASE WHEN waits < 0 THEN NULL ELSE waits  END/duration) END) iops_direct
+,      MAX(CASE WHEN event_name = 'direct path read'        THEN ROUND(CASE WHEN time_waited_micro/1000/1000 < 0 THEN NULL ELSE time_waited_micro/1000/1000 END) END) direct_secs_total
+,      MAX(CASE WHEN event_name = 'direct path read'        THEN ROUND((time_waited_micro/1000)/NULLif(waits,0)) END) direct_avg
+,      MAX(CASE WHEN event_name = 'direct path read temp'   THEN ROUND(CASE WHEN waits < 0 THEN NULL ELSE waits END/duration) END) iops_temp
+,      MAX(CASE WHEN event_name = 'direct path read temp'   THEN ROUND(CASE WHEN time_waited_micro/1000/1000 < 0 THEN NULL ELSE time_waited_micro/1000/1000 END) END) temp_secs_total
+,      MAX(CASE WHEN event_name = 'direct path read temp'   THEN ROUND((time_waited_micro/1000)/NULLif(waits,0)) END) temp_avg
+FROM   io_stats io
+GROUP BY
+       io.dbid
+,      io.inst
+,      io.b_day
+,      io.b_snap
+,      io.e_snap
+,      io.b_time
+,      io.e_time
+,      io.duration
+HAVING b_day NOT IN (6,7)
+AND    inst = 2
+--AND b_snap = 18673
+--AND    e_time = '17:00'
+ORDER BY b_snap DESC;
+
+--Finally, one of the queries I used the most for quick checks – comparing top SQL in AWR across periods:
+
+SELECT * 
+FROM   (SELECT h.dbid
+        ,      h.instance_number
+        ,      h.snap_id
+        ,      h.sql_id
+        ,      h.sql_exec_id
+        ,      h.sql_exec_start
+        ,      h.qc_instance_id||'::'||h.qc_session_id||'::'||h.qc_session_serial# px_details
+        ,      COUNT(*)
+        ,      COUNT(DISTINCT h.session_id)
+        --,      MIN(h.snap_id) min_snap
+        --,      MAX(h.snap_id) max_snap
+        ,      MIN(h.sample_time)
+        ,      MAX(h.sample_time)
+        ,    ((EXTRACT(DAY    FROM (MAX(h.sample_time) - MIN(h.sample_time)))*86400)
+            + (EXTRACT(HOUR   FROM (MAX(h.sample_time) - MIN(h.sample_time)))*3600)
+            + (EXTRACT(MINUTE FROM (MAX(h.sample_time) - MIN(h.sample_time)))*60)
+            + (EXTRACT(SECOND FROM (MAX(h.sample_time) - MIN(h.sample_time))))) duration
+        FROM   dba_hist_active_sess_history h
+        ,      dba_hist_snapshot            s
+        WHERE  h.dbid            = s.dbid
+        AND    h.snap_id         = s.snap_id
+        AND    h.instance_number = s.instance_number
+        AND    sql_id           IS NOT NULL
+        AND    sql_exec_id      IS NOT NULL
+        AND    NOT EXISTS (SELECT 1
+                           FROM   dba_hist_sqlstat st
+                           WHERE  st.dbid            = h.dbid
+                           AND    st.snap_id         = h.snap_id --BETWEEN xxx.min_snap AND xxx.max_snap
+                           AND    st.instance_number = h.instance_number
+                           AND    st.sql_id          = h.sql_id)
+        GROUP BY 
+               h.dbid
+        --
+        ,      h.snap_id
+        --
+        ,      h.instance_number
+        ,      h.sql_id
+        ,      h.sql_exec_id
+        ,      h.sql_exec_start
+        ,      h.qc_instance_id
+        ,      h.qc_session_id
+        ,      h.qc_session_serial#) xxx
+WHERE  duration > 600
+ORDER BY snap_id DESC, duration DESC;
+
+----
+-Luckily there are other sources of information in AWR, and system metrics is one of those thing which provides a more detailed view of the system performance. 
+-So I’ve used the following query to pull all the data out of DBA_HIST_SYSMETRIC_HISTORY:
+
+with t_interval as
+(
+ select /*+ inline */ sysdate-30 begin, sysdate as end from dual
+)
+select
+  begin_time      ,
+  end_time        ,
+  aas             ,
+  logons_sec      ,
+  redo_sec        ,
+  user_calls_sec  ,
+  exec_sec        ,
+  phys_reads_sec  ,
+  network_sec     ,
+  io_mb_sec       ,
+  txn_sec         ,
+  phys_writes_sec ,
+  io_req_sec      ,
+  lio_txn         ,
+  parse_cnt_txn   ,
+  phys_reads_txn  ,
+  redo_txn        ,
+  response_txn    ,
+  db_changes_txn  ,
+  avg_1b_sync_read,
+  sql_response
+from
+(
+  select
+    begin_time    ,
+    end_time      ,
+    metric_name   ,
+    value
+  from
+    dba_hist_sysmetric_history,
+    t_interval t
+  where begin_time >= t.begin
+    and end_time <= t.end
+    and dbid = (select d.dbid from v$database d)
+    and instance_number = (select i.instance_number from v$instance i)
+)
+pivot
+(
+  max(value) for metric_name in
+    (
+      'Logons Per Sec'                                as logons_sec       ,
+      'Redo Generated Per Sec'                        as redo_sec         ,
+      'Average Active Sessions'                       as aas              ,
+      'Total Parse Count Per Txn'                     as parse_cnt_txn    ,
+      'Physical Reads Per Txn'                        as phys_reads_txn   ,
+      'Redo Generated Per Txn'                        as redo_txn         ,
+      'User Calls Per Sec'                            as user_calls_sec   ,
+      'Average Synchronous Single-Block Read Latency' as avg_1b_sync_read ,
+      'Response Time Per Txn'                         as response_txn     ,
+      'Executions Per Sec'                            as exec_sec         ,
+      'Physical Reads Per Sec'                        as phys_reads_sec   ,
+      'Network Traffic Volume Per Sec'                as network_sec      ,
+      'Logical Reads Per Txn'                         as lio_txn          ,
+      'DB Block Changes Per Txn'                      as db_changes_txn   ,
+      'I/O Megabytes per Second'                      as io_mb_sec        ,
+      'User Transaction Per Sec'                      as txn_sec          ,
+      'SQL Service Response Time'                     as sql_response     ,
+      'Physical Writes Per Sec'                       as phys_writes_sec  ,
+      'I/O Requests per Second'                       as io_req_sec
+    )
+)
+order by begin_time;
