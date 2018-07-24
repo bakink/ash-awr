@@ -1,0 +1,15 @@
+select date#,"'1'" as first_node,"'2'" as second_node,"'3'" as third_node,"'4'" as fourth_noth from (
+(SELECT TRUNC(sample_time, 'MI') - MOD(TO_CHAR(sample_time, 'MI'), 10) / (24 * 60) as date#,inst_id,
+       MAX (sql_exec_id) - MIN (sql_exec_id) EXECUTIONS_PER_10_MINUTE
+  FROM gv$active_Session_history
+ WHERE    sql_id = 'ccak418d7u8ud'
+group by TRUNC(sample_time, 'MI') - MOD(TO_CHAR(sample_time, 'MI'), 10) / (24 * 60),inst_id
+order by 1 asc )
+)
+pivot 
+(
+   sum(EXECUTIONS_PER_10_MINUTE)
+   for inst_id in ('1'  ,'2','3','4' )
+) order by date# asc;
+
+
