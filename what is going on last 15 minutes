@@ -1,0 +1,60 @@
+
+---http://orcasoracle.squarespace.com/oracle-rdbms/2018/8/11/the-oracle-active-session-history-ash-a-real-treasure-trove.html
+
+
+COLUMN USERNAME FORMAT A15
+COLUMN UNITS    FORMAT A6
+COLUMN EVENTS   FORMAT A80
+COLUMN INST_ID  FORMAT A7
+SET    LINESIZE 120
+SET    PAGESIZE 50
+SELECT Q2.Inst_Id, Q2.Sid, Q2.Sql_Id, Q2.Start_Time, Du.Username, Q2.Units, Q2.Events, Q2.Sql_Text
+  FROM (SELECT Q1.*
+              ,(SELECT s.Sql_Text
+                  FROM Gv$sql s
+                 WHERE s.Inst_Id = Q1.Inst_Id
+                   AND s.Sql_Id = Q1.Sql_Id
+                   AND Rownum < 2) AS Sql_Text
+          FROM (SELECT Qx.Inst_Id
+                      ,Qx.Session_Id AS Sid
+                      ,To_Char(MIN(Qx.Sql_Exec_Start), 'HH24:MI:SS') AS Start_Time
+                      ,Qx.Sql_Id
+                      ,Qx.Sql_Exec_Id
+                      ,Qx.User_Id
+                      ,SUM(Qx.Num_Samples) AS Units
+                      ,Listagg(Qx.Event || '(' || Qx.Num_Samples || ')', ', ') Within GROUP(ORDER BY Qx.Num_Samples DESC) AS Events
+                  FROM (SELECT Ash.Inst_Id
+                              ,Ash.Session_Id
+                              ,Ash.User_Id
+                              ,MIN(Ash.Sql_Exec_Start) AS Sql_Exec_Start
+                              ,CASE
+                                   WHEN (Session_State = 'ON CPU') THEN
+                                    Ash.Session_State
+                                   ELSE
+                                    Ash.Event
+                               END AS Event
+                              ,Ash.Sql_Id
+                              ,Ash.Sql_Exec_Id
+                              ,COUNT(*) AS Num_Samples
+                          FROM Gv$active_Session_History Ash
+                         WHERE Ash.Sample_Time > SYSDATE - INTERVAL '15' Minute
+                         GROUP BY Ash.Inst_Id
+                                 ,Ash.Session_Id
+                                 ,Ash.User_Id
+                                 ,CASE
+                                      WHEN (Session_State = 'ON CPU') THEN
+                                       Ash.Session_State
+                                      ELSE
+                                       Ash.Event
+                                  END
+                                 ,Ash.Sql_Id
+                                 ,Ash.Sql_Exec_Id) Qx
+                 GROUP BY Qx.Inst_Id, Qx.Session_Id, Qx.User_Id, Qx.Sql_Id, Qx.Sql_Exec_Id
+                 ORDER BY Units DESC) Q1
+         WHERE Rownum <= 30) Q2
+ INNER JOIN Dba_Users Du
+    ON Q2.User_Id = Du.User_Id
+ ORDER BY Q2.Inst_Id, Q2.Units DESC, Q2.Start_Time DESC, Q2.Sid, Q2.Sql_Id, Q2.Sql_Exec_Id;
+ 
+
+ 
