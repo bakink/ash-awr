@@ -1,0 +1,12 @@
+
+--https://iusoltsev.wordpress.com/2018/08/17/12-2-materialized-view-refresh-statistics-slowdown/
+
+select sql_id, sql_exec_id, count(*), min(sample_time), max(sample_time), dbms_lob.substr(sql_text,100)
+      from gv$active_session_history
+      left join dba_hist_sqltext using (sql_id)
+     where session_id = 3634
+       and inst_id = 1
+       and session_serial# = 17328
+     group by sql_id, sql_exec_id, dbms_lob.substr(sql_text,100)
+    having count(*) > 3
+    order by 4
