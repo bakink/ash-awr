@@ -1,0 +1,7 @@
+
+--http://ctulu.blogspot.com/2015/08/blog-post.html
+select DBMS_SQLTUNE.REPORT_SQL_MONITOR(sql_id => sqlm.sql_id, type=>'TEXT', report_level=>'ALL', sql_plan_hash_value=>sqlm.sql_plan_hash_value, sql_exec_id=>sqlm.sql_exec_id) stat,
+sqlm.* from gv$sql_monitor sqlm
+where last_refresh_time > sysdate-10/(60*24)
+and status = 'DONE (ERROR)'
+order by sql_exec_start desc;
