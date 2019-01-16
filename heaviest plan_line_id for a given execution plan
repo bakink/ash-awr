@@ -7,6 +7,17 @@ and sql_plan_hash_value=406502908
 group by sql_plan_operation, sql_plan_options, sql_plan_line_id, current_obj#,event
 order by count(*) desc;
 
+SELECT SQL_PLAN_LINE_ID, SQL_PLAN_OPERATION, SQL_PLAN_OPTIONS,
+count(distinct sample_time) wctime,
+round(count(distinct sample_time)/
+sum(count(distinct sample_time)) over() *100) "WC Time (%)"
+FROM V$ACTIVE_SESSION_HISTORY
+WHERE
+SQL_ID = ‘&sql_id’
+GROUP BY SQL_PLAN_LINE_ID, SQL_PLAN_OPERATION, SQL_PLAN_OPTIONS
+ORDER BY wctime desc;
+
+
 --https://savvinov.com/2013/10/14/ash-basics/
 --This query tells where in the plan a certain SQL statement is spending most of its time, 
 --which is very useful for troubleshooting SQL retrospectively if SQL real-time monitor information is not available.
