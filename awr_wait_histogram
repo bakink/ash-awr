@@ -1,0 +1,146 @@
+
+--https://nigelnoble.wordpress.com/awr_wait_histogram.sql/
+--https://nigelnoble.wordpress.com/2015/01/08/log-file-sync-and-the-mttr-advisor/
+
+select      dat.event,
+      to_char(dat.snap_time,'DD-MON-YY HH24:MI') Snap_Time,
+      dat.total_waits "total",
+--     snap_ela,
+      round(dat.total_waits/snap_ela,0) "IOPS",     
+      round((to1 / total_waits) * 100,2) "% <1ms", 
+      round((to2 / total_waits) * 100,2) "% <2",
+      round((to4 / total_waits) * 100,2) "% <4",
+      round((to8 / total_waits) * 100,2) "% <8", 
+      round((to16 / total_waits) * 100,2) "% <16",
+      round((to32 / total_waits) * 100,2) "% <32",
+      round((to64 / total_waits) * 100,2) "% <64", 
+      --round((to128 / total_waits) * 100,2) "% <128ms",
+      --round((to256 / total_waits) * 100,2) "% <256ms",
+      --round((to512 / total_waits) * 100,2) "% <512ms",
+      --round((to1024 / total_waits) * 100,2) "% <1024ms"
+      null "->cnt",   
+      to128 "<128",
+      to256 "<256",
+      to512 "<512",
+      to1024 "<1s",
+      to2048 "<2s"       ,
+      dat.snap_ela,
+      dat.event,
+       to_char(dat.snap_time,'DD-MON-YY HH24:MI') Snap_Time,
+      dat.total_waits,
+      round(dat.total_waits/snap_ela,0) "IOPS",  
+      dat.to1,
+      dat.to2,
+      dat.to4,
+      dat.to8,
+      dat.to16,
+      dat.to32,
+      dat.to64,
+      dat.to128,
+      dat.to256,
+      dat.to512,
+      dat.to1024 to1s,
+      dat.to2048 to2s,
+      dat.to4096 to4s,
+      dat.to8192 to8s,
+      dat.to16384 to16s,
+      dat.to32768 to32s,
+      dat.over to_over
+from 
+(select snap_time,
+       snap_id,
+       dbid,
+       instance_number,
+      (cast (snap_time as date )  - lag(cast (SNAP_TIME as date))   over (partition by event order by event,instance_number,snap_id)) * ( 24 * 60 * 60)  snap_ela ,
+       event,
+       (total_waits - lag(total_waits  )  over (partition by event,instance_number order by event,instance_number,snap_id)) total_waits,
+       (to1         - lag(to1          )  over (partition by event,instance_number order by event,instance_number,snap_id)) to1, 
+       (to2         - lag(to2          )  over (partition by event,instance_number order by event,instance_number,snap_id)) to2, 
+       (to4         - lag(to4          )  over (partition by event,instance_number order by event,instance_number,snap_id)) to4, 
+       (to8         - lag(to8          )  over (partition by event,instance_number order by event,instance_number,snap_id)) to8, 
+       (to16        - lag(to16         )  over (partition by event,instance_number order by event,instance_number,snap_id)) to16, 
+       (to32        - lag(to32         )  over (partition by event,instance_number order by event,instance_number,snap_id)) to32, 
+       (to64        - lag(to64         )  over (partition by event,instance_number order by event,instance_number,snap_id)) to64, 
+       (to128       - lag(to128        )  over (partition by event,instance_number order by event,instance_number,snap_id)) to128, 
+       (to256       - lag(to256        )  over (partition by event,instance_number order by event,instance_number,snap_id)) to256, 
+       (to512       - lag(to512        )  over (partition by event,instance_number order by event,instance_number,snap_id)) to512, 
+       (to1024      - lag(to1024       )  over (partition by event,instance_number order by event,instance_number,snap_id)) to1024, 
+       (to2048      - lag(to2048       )  over (partition by event,instance_number order by event,instance_number,snap_id)) to2048, 
+       (to4096      - lag(to4096       )  over (partition by event,instance_number order by event,instance_number,snap_id)) to4096, 
+       (to8192      - lag(to8192       )  over (partition by event,instance_number order by event,instance_number,snap_id)) to8192, 
+       (to16384     - lag(to16384      )  over (partition by event,instance_number order by event,instance_number,snap_id)) to16384, 
+       (to32768     - lag(to32768      )  over (partition by event,instance_number order by event,instance_number,snap_id)) to32768,                                           
+       (over        - lag(over         )  over (partition by event,instance_number order by event,instance_number,snap_id)) over        
+         from (
+  select
+       sn.snap_id,
+       sn.dbid,
+       sn.instance_number ,
+       end_interval_time snap_time,
+       h.event_name event,
+         sum(h.wait_count) total_waits
+       , sum(case when (h.wait_time_milli = 1)
+                  then (nvl(h.wait_count,0)) else 0 end) to1
+       , sum(case when (h.wait_time_milli = 2)
+                  then (nvl(h.wait_count,0)) else 0 end) to2
+       , sum(case when (h.wait_time_milli = 4)
+                  then (nvl(h.wait_count,0)) else 0 end) to4
+       , sum(case when (h.wait_time_milli = 8)
+                  then (nvl(h.wait_count,0)) else 0 end) to8
+       , sum(case when (h.wait_time_milli = 16)
+                  then (nvl(h.wait_count,0)) else 0 end) to16
+       , sum(case when (h.wait_time_milli = 32)
+                  then (nvl(h.wait_count,0)) else 0 end) to32
+       , sum(case when (h.wait_time_milli = 64)
+                  then (nvl(h.wait_count,0)) else 0 end) to64
+       , sum(case when (h.wait_time_milli = 128)
+                  then (nvl(h.wait_count,0)) else 0 end) to128
+       , sum(case when (h.wait_time_milli = 256)
+                  then (nvl(h.wait_count,0)) else 0 end) to256
+       , sum(case when (h.wait_time_milli = 512)
+                  then (nvl(h.wait_count,0)) else 0 end) to512
+       , sum(case when (h.wait_time_milli = 1024)
+                  then (nvl(h.wait_count,0)) else 0 end) to1024
+       , sum(case when (h.wait_time_milli = 2048)
+                  then (nvl(h.wait_count,0)) else 0 end) to2048
+      , sum(case when (h.wait_time_milli = 4096)
+                  then (nvl(h.wait_count,0)) else 0 end) to4096
+      , sum(case when (h.wait_time_milli = 8192)
+                  then (nvl(h.wait_count,0)) else 0 end) to8192
+      , sum(case when (h.wait_time_milli = 16384)
+                  then (nvl(h.wait_count,0)) else 0 end) to16384
+      , sum(case when (h.wait_time_milli = 32768)
+                  then (nvl(h.wait_count,0)) else 0 end) to32768
+      , sum(case when (h.wait_time_milli > 32768 )
+                  then (nvl(h.wait_count,0)) else 0 end) over
+  from dba_hist_event_histogram  h,
+       dba_hist_snapshot sn
+  where
+         h.instance_number = sn.instance_number
+     and sn.instance_number = 1  -- which instance?
+     and  h.event_name in ('control file parallel write','control file sequential read',
+                           'db file parallel write','db file scattered read','db file sequential read',
+                           'direct path read','direct path write',
+                           'log file parallel write','log file sync',
+                           'log file switch completion','db file parallel read',
+                           'enq: TX - index contention','LGWR wait for redo copy')
+   -- and h.event_name like '%file%'
+     and sn.snap_id=h.snap_id
+     and sn.dbid=h.dbid
+--     and begin_interval_time between  to_date('11-MAY-2013 13:25','dd-mon-yyyy hh24:mi')
+--                                 and  to_date('11-MAY-2013 16:35','dd-mon-yyyy hh24:mi')
+--       and to_char(end_interval_time,'DAY') like '%SAT%'
+--      and to_char(end_interval_time,'HH24') in ('10','11','12','13','14','15','16','17','18')
+and begin_interval_time > sysdate - 25
+     group by      sn.snap_id,sn.instance_number,
+       sn.dbid,
+       end_interval_time,
+       h.event_name
+     order by h.event_name,sn.instance_number,sn.snap_id
+)    
+order by event,instance_number,snap_id
+) dat
+where total_waits > 0    -- Filter out db restarts 
+and snap_ela < 1000      -- Filter out db restart, only return 15 minute awr snaps  
+--and   event like '%log file par%'
+order by 1, dat.snap_time
