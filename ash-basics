@@ -1,0 +1,280 @@
+---https://savvinov.com/2013/10/14/ash-basics/
+
+
+ASH basics
+ savvinov   ASH   October 14, 2013  9 Minutes
+Introduction
+Active session history (ASH), available since 10g, is one of the greatest performance troubleshooting tools available for Oracle databases. And one of most underutilized, too. In this article I will give some basic guidelines regarding ASH usage, and will list some of my favorite ASH queries.
+
+ASH is a view (V$ACTIVE_SESSION_HISTORY). It can give most of the information found in trace files, but unlike tracing, it’s always on!
+
+Using ASH is extremely simple, because you don’t have enable any events or go to database server filesystem to retrieve the results: you just query the view. However, there are a few basic rules that allow to use ASH with maximum efficiency, and minize the risk of misinterpreting its output.
+
+Using ASH efficiently
+1. Don’t use automatic ASH reports
+
+Using regular SQL to pull information out of ASH is the simplest and most reliable way, and it gives you the full control. Using dbms_workload_repository or third-party tools to generate and pre-process ASH data is neither necessary nor helpful.
+
+2.  Count samples to obtain timings
+
+Don’t use TIME_WAITED column to calculate timings, this will lead to wrong results (because sampled data is biased towards longer events ). Instead, use sample counts. Since ASH samples are collected every second, the number of samples can be used as an estimate of number of seconds taken by certain activity (or certain events, or spent in certain state, etc.). E.g. if you have X counts with event=’db file sequential read’ then you know that the database spent about X seconds on that event.
+
+Note that when counting events from DBA_HIST_ACTIVE_SESS_HISTORY, one count represents 10 seconds, not 1 (only one sample out of 10 is kept to save space).
+
+3. Be aware of short expiration dates
+
+ASH collects an enormous amount of diagnostic data — obviously, these data cannot be kept indefinitely long. V$ACTIVE_SESSION_HISTORY has about 1 hour worth of diagnostic data. DBA_HIST_ACTIVE_SESSION_HISTORY can have up to several days of history (depending on your settings), but it only keeps 1 sample out of 10 (i.e. its time resolution is 10 times worse).
+
+This means that you need to look at ASH as soon as possible (e.g. you can always look at AWR later, if your retention is large enough, the snapshots are going to be available for weeks). Or better yet, dump relevant entries from V$ACTIVE_SESSION_HISTORY into a table to analyze them later.
+
+Also, it means that you need to check the overlap between the interval of interest and the interval for which ASH data is available, or you can misinterpret ASH results.
+
+Update As suggested by Christos in his comment to the post, one could use V$ASH_INFO to check ASH metadata, like earliest/latest sample time. I myself simply use:
+
+SELECT min(sample_time) min_sample_time,
+       max(sample_time) max_sample_time
+FROM V$ACTIVE_SESSION_HISTORY
+4. Instrument your code to make ASH efficient.
+
+One of strengths of ASH is that it allows you to look at a single session or a group of sessions (pertaining to a certain application or a module). This is a big advantage over global tools like AWR, which can only give you aggregated or averaged statistics for the entire instance. However, you need to be able to identify the session(s) of interest.  Columns like CLIENT_ID, ACTION, MODULE, are very efficient for that purpose, but you need to do a little work to make sure that they are properly populated, i.e. call dbms_session.set_identifier and/or dbms_application_info.set_action/set_module inside the application to let the database know what part of the application the current session is related to.
+
+5. Be aware of the statistical error.
+
+Trace files give duration of various events as measured by database kernel code. It’s subject to an instrumentation error, but there is no statistical error. ASH is different because it’s based on sampling. Sampling techniques are statistical by their nature, i.e. the more samples you have, the better is statistical accuracy. Quantitatively, statistical error can be estimated using formulas Poisson’s distribution, i.e. the inverse square root of number of counts. For example, if your period of interest covers 16 seconds, i.e. 16 samples in V$ACTIVE_SESSION_HISTORY, then statistically your results will be accurate to 25%.
+
+Sample ASH queries
+Here are some queries to show you want one can do with ASH data. Here I used both V$ACTIVE_SESSION_HISTORY and DBA_HIST_ACTIVE_SESS_HISTORY views (depending on how recent the time period of interest is you can always use either view). The SQL below can be used as building blocks for creating other useful queries.
+
+I’ve used 11.2.0.3 for testing, but items 1 through 8 should work on 10g as well.
+
+1. Current CPU usage by this instance
+
+select round(100*num_cpus_in_use/num_cpus_total,1) cpu_usage_pct
+from
+(
+    select count(*) num_cpus_in_use
+    from v$active_session_history
+    where sample_time =
+        (select max(sample_time)
+         from v$active_session_history
+        )
+    and session_state = 'ON CPU'
+),
+(select value num_cpus_total
+ from v$osstat
+ where stat_name = 'NUM_CPUS'
+) num_cpus;
+2. Top 5 events for an arbitrary interval
+
+This query returns information similar to “top 5 timed foreground events” in the AWR report, but with ASH you are free to choose any interval you like, rather than being limited by AWR snapshots.
+
+select *
+from
+(
+    select nvl(event, session_state) event,
+           round(100*count(*)/
+              (sum(count(1)) over ()), 2) "DB time (%)"
+    from v$active_session_history
+    where sample_time between to_date(:start_time, 'dd-mon-yyyy hh24:mi:ss')
+                      and to_date(:end_time, 'dd-mon-yyyy hh24:mi:ss')
+    group by nvl(event, session_state)
+    order by count(*) desc
+)
+where rownum<=5;
+3. Database activity as a function of time
+
+This query is convenient for plotting (e.g. with gnuplot or other similar tool) database activity (also known as average active sessions or AAS) versus time.
+
+select sample_time time,
+       count(*) activity
+from v$active_session_history
+group by sample_time
+order by sample_time;
+4. Wait profile for a single SQL statement
+
+This query is useful when you need to understand what a specific SQL statement was waiting on — I/O, CPU or something else. This information is similar to wait info in trace files.
+
+select nvl(event, session_state) event,
+       round(100*count(*)/
+         (sum(count(1)) over ()), 2) "% query time"
+from dba_hist_active_sess_history
+where sql_id = :sql_id
+group by nvl(event, session_state)
+order by count(*) desc;
+5. Top SQL for a module
+
+This query gives output similar to contents of “SQL ordered by elapsed time” section of AWR reports, but it gives you more flexibility, because not only you can pick any interval you like, but also you can filter only SQL pertaining to some application module. Of course you can only do that, if the application code is properly instrumented (i.e. it calls dbms_application_info.set_module to specify the current module). In this query and below :len bind variable sets the size for the SQL text (I normally use :len=100).
+
+select nvl(ash.sql_id, 'N/A') sql_id,
+       replace(nvl(txt.sql_text_short, 'N/A'), chr(10), '\n') sql_text,
+       count(*) "DB time(s)",
+       round(100*count(*)/
+         sum(count(1)) over(), 2) "DB time(%)"
+from v$active_session_history ASH,
+     (select sql_id,
+             dbms_lob.substr(sql_text, :len) sql_text_short
+      from v$sql
+      union all
+      select sql_id,
+             dbms_lob.substr(sql_text, :len) sql_text_short
+      from dba_hist_sqltext      ) txt
+where ash.sql_id = txt.sql_id (+)
+and module = :module
+group by ash.sql_id, txt.sql_text_short
+order by count(*) desc;
+6. Profiling PL/SQL calls in a module
+
+This query gives output similar to that given by PL/SQL profilers, but only for top-level PL/SQL calls. In principle ASH also contains information for bottom-level PL/SQL calls, but it’s not always useful because apparently when a PL/SQL routine is running SQL, bottom-level PL/SQL info is not properly filled.
+
+select P.OBJECT_NAME ||
+          case when p.object_name is not null
+                      and p.procedure_name is not null
+               then '.'
+          end ||
+          P.PROCEDURE_NAME top_plsql_object_name,
+          count(*) "DB time (s)"
+from v$active_session_history ash,
+dba_procedures p
+where ASH.PLSQL_ENTRY_OBJECT_ID = P.OBJECT_ID (+)
+and ASH.PLSQL_ENTRY_SUBPROGRAM_ID = P.SUBPROGRAM_ID (+)
+and module = :module
+group by p.object_name, p.procedure_name
+order by count(*) desc;
+7. Accessed objects
+
+This query gives the breakdown of DB time within the interval of interest by database objects accessed.
+
+select nvl(o.owner ||
+         case when o.object_name is not null
+              then '.'
+         end                 ||
+        o.object_name, 'N/A') object_name,
+        round(100*count(*)/
+           sum(count(1)) over (), 2) "DB time (%)"
+from dba_hist_active_SESS_HISTORY ash,
+     dba_objects o
+where ash.CURRENT_OBJ# = o.object_id (+)
+and ash.sample_time between to_date(:start_period, 'dd-mon-yyyy hh24:mi:ss')
+                    and to_date(:end_period, 'dd-mon-yyyy hh24:mi:ss')
+group by o.owner || case when o.object_name is not null
+                    then '.' end
+                 || o.object_name
+order by count(*) desc;
+8. Datafile access during last N hours
+
+This query gives the breakdown of DB time by files accessed (useful for troubleshooting I/O problems).
+
+select nvl(f.file_name, 'not in I/O waits'),
+       10*count(*) "DB time (s)",
+       round(100*count(*)/
+         sum(count(1)) over (), 2) "DB time (%)"
+from DBA_HIST_ACTIVE_SESS_HISTORY ash,
+     DBA_DATA_FILES f where ash.current_file# = f.file_id (+)
+and ash.sample_time > sysdate - :hours/24
+group by f.file_name
+order by count(*) desc;
+9. Breakdown of query DB time by plan operations
+
+This query tells where in the plan a certain SQL statement is spending most of its time, which is very useful for troubleshooting SQL retrospectively if SQL real-time monitor information is not available.
+
+SELECT ash.sql_plan_line_id,
+       ash.sql_plan_operation,
+       ash.sql_plan_options,
+       p.object_name,
+       round(100*COUNT(*)/
+          sum(count(1)) over(), 2) "% time"
+FROM v$active_session_history ash,
+        v$sql_plan p
+WHERE ash.sql_id = p.sql_id
+AND ash.sql_plan_hash_value = p.plan_hash_value
+AND ash.sql_plan_line_id = P.id
+AND ash.sql_id = :sql_id
+AND ash.sql_plan_hash_value = :plan_hash_value
+GROUP BY ASH.SQL_PLAN_LINE_ID,
+         ASH.SQL_PLAN_OPERATION,
+         ASH.SQL_PLAN_OPTIONS,
+         p.object_name
+ORDER BY count(*) DESC;
+10. Long-running queries at a specific moment in time
+
+select distinct sql_ID,
+       24*60*60*(sysdate - sql_exec_start) seconds_running
+FROM v$active_session_history
+where sample_time =  (select max(sample_time)
+                      from v$active_session_history
+                      where sample_time < to_date(:time,
+                           'dd-mon-yyyy hh24:mi'))
+and sql_id is not null
+order by 24*60*60*(sysdate - sql_exec_start) desc;
+11. Time model statistics query
+
+This query gives breakdown of DB time by session state, similar to the time model statistics section of the AWR report.
+
+select status,
+        round(100*count(*)/
+                   sum(count(1)) over(), 2) "% DB time"
+from
+(
+    select case when in_connection_mgmt='Y'
+                  then 'IN_CONNECTION_MGMT'
+                when in_parse = 'Y'
+                  then 'IN_PARSE'
+                when in_hard_parse = 'Y'
+                  then 'IN_HARD_PARSE'
+                when in_sql_execution = 'Y'
+                  then 'IN_sql_execution'
+                when in_plsql_execution = 'Y'
+                  then 'IN_plsql_execution'
+                when in_plsql_compilation = 'Y'
+                  then 'IN_plsql_compilation'
+                when in_plsql_rpc = 'Y'
+                  then 'IN_plsql_rpc'
+                when in_java_execution = 'Y'
+                  then 'IN_JAVA_EXECUTION'
+                when in_bind = 'Y'
+                  then 'IN_BIND'
+                when in_cursor_close = 'Y'
+                  then 'IN_CURSOR_CLOSE'
+                when in_sequence_load = 'Y'
+                  then 'IN_SEQUENCE_LOAD'
+                else 'N/A'
+           end status
+    FROM dba_hist_active_sess_history
+)
+group by status
+order by count(*) desc;
+
+12. SQL statements consuming most PGA at a specific time
+
+This query can help troubleshoot out-of-memory errors like ORA-4030 by providing a list of top PGA consumers and size of PGA allocated to them.
+
+select ash.sql_id,
+       replace(nvl(txt.sql_text_short, 'N/A'),
+               chr(10), '\n'
+               ) sql_text,
+       round(ASH.PGA_ALLOCATED/1024/1024) pga_mb
+from dba_hist_active_sess_history ash,
+     (
+        select sql_id, dbms_lob.substr(sql_text, :len) sql_text_short
+        from v$sql
+        union all
+        select sql_id, dbms_lob.substr(sql_text, :len) sql_text_short
+        from dba_hist_sqltext
+     ) txt
+where ash.sql_id = txt.sql_id (+)
+and ash.sql_id is not null
+and ash.sample_time = (select max(sample_time)
+                     from dba_hist_active_sess_history
+                     where sample_time < to_date(:time, 'dd-mon-yyyy hh24:mi:ss'))
+order by ash.pga_allocated desc;
+Summary
+In this post we could (hopefully) see that ASH is a valuable source of various kinds of diagnostic information for troubleshooting recent and on-going performance issues. Unlike SQL trace and some other diagnostic tools, it doesn’t require any special setup, access to the database server filesystem etc. Unlike AWR data, ASH doesn’t require any complex reporting tools, and can be queried directly, using queries like ones given above. When interpreting results of these queries it is important to understand their statistical nature (the more counts you get, the higher the accuracy).
+
+Some useful links on ASH
+General introduction to ASH on oracle-base
+
+Kyle Hailey’s page on ASH
+
+Randolf Geist’s post on using ASH with parallel queries
+
+Share this:
