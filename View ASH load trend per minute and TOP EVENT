@@ -1,0 +1,13 @@
+--View ASH load trend per minute and TOP EVENT
+select inst_id,etime,events,db_time,avg_waited,pct,aas,lpad('*',sum(aas) over(partition by inst_id,etime)/CPUS,'*') load
+   from (
+          select inst_id,etime,nvl(event,'on cpu') events, lpad(dbtime,10,' ')||' s' db_time,round(dbtime/24) AAS, avg_waited,(select param.value from gv$parameter param where param.name like '%cpu_count%' and param.inst_id=v.inst_id ) cpus
+             ,lpad(round(100*ratio_to_report(dbtime) OVER (partition by etime ),2)||'%',15,' ') pct,row_number() over(partition by etime order by dbtime  desc) rn
+       from (
+      select  inst_id,to_char(SAMPLE_TIME,'yyyymmdd hh24:mi') etime,event,  count(*) dbtime, lpad(round(avg(time_waited)/1000,2)||' ms',20,' ') avg_waited 
+       from gv$active_session_history gash 
+       where SESSION_TYPE='FOREGROUND'   AND inst_id=1
+      and   sample_time between to_date('2020-7-1 08:30','yyyy-mm-dd hh24:mi') and to_date('2020-7-1 09:20','yyyy-mm-dd hh24:mi')
+       group by  inst_id,to_char(SAMPLE_TIME,'yyyymmdd hh24:mi'),event
+) v
+      ) where rn<=5 order by 1,2;  
