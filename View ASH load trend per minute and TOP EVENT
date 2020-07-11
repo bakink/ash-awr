@@ -1,3 +1,5 @@
+--https://www.anbob.com/archives/5897.html
+
 --View ASH load trend per minute and TOP EVENT
 select inst_id,etime,events,db_time,avg_waited,pct,aas,lpad('*',sum(aas) over(partition by inst_id,etime)/CPUS,'*') load
    from (
