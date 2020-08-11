@@ -1,0 +1,3 @@
+
+select owner,object_name ,count(*) from dba_objects o, v$active_session_history h where h.sample_time>sysdate-30/1440 and h.WAIT_CLASS='Concurrency' 
+and h.current_obj#=o.object_id group by owner,object_name order by 3 desc; 
