@@ -1,0 +1,1490 @@
+
+--http://gorodovets.blogspot.com/2009/10/oracle-top-sql.html
+
+SELECT schemaname, 
+       COUNT(*) sessions  
+ FROM V$SESSION 
+WHERE schemaname <> 'SYS' 
+GROUP BY schemaname 
+ORDER BY COUNT(*) DESC;
+
+
+
+Resource utilization history
+ 
+ 
+select to_char(BEGIN_INTERVAL_TIME,'dd-mm-yyyy HH24:MI'), 
+       to_char(END_INTERVAL_TIME,'dd-mm-yyyy HH24:MI'), 
+       ss.SNAP_ID, 
+       l.CURRENT_UTILIZATION, 
+       l.MAX_UTILIZATION 
+  from DBA_HIST_RESOURCE_LIMIT l, 
+       DBA_HIST_SNAPSHOT ss
+ where ss.SNAP_ID = l.SNAP_ID
+   and upper(l.RESOURCE_NAME) like upper('%&resource_name%')
+order by BEGIN_INTERVAL_TIME;
+/
+ 
+ 
+ 
+Top SQL by Buffer Gets
+
+select substr(sql_text,1,500) "SQL",
+      (cpu_time/1000000) "CPU_Seconds",
+      disk_reads "Disk_Reads",
+      buffer_gets "Buffer_Gets",
+      executions "Executions",
+      case when rows_processed = 0 then null
+           else round((buffer_gets/nvl(replace(rows_processed,0,1),1)))
+           end "Buffer_gets/rows_proc",
+      round((buffer_gets/nvl(replace(executions,0,1),1))) "Buffer_gets/executions",
+      (elapsed_time/1000000) "Elapsed_Seconds",
+      module "Module"
+ from v$sql s
+order by buffer_gets desc nulls last;
+
+
+ 
+Top SQL by Buffer Gets / Rows Proc
+
+select substr(sql_text,1,500) "SQL",
+      round((cpu_time/1000000),3) "CPU_Seconds",
+      disk_reads "Disk_Reads",
+      buffer_gets "Buffer_Gets",
+      executions "Executions",
+      case when rows_processed = 0 then null
+           else round((buffer_gets/nvl(replace(rows_processed,0,1),1)))
+           end "Buffer_gets/rows_proc",
+      round((buffer_gets/nvl(replace(executions,0,1),1))) "Buffer_gets/executions",
+      (elapsed_time/1000000) "Elapsed_Seconds",
+      module "Module"
+ from v$sql s
+order by (buffer_gets/nvl(replace(rows_processed,0,1),1)) desc nulls last;
+
+
+ 
+Top SQL by Disk Reads
+
+select substr(sql_text,1,500) "SQL",
+      (cpu_time/1000000) "CPU_Seconds",
+      disk_reads "Disk_Reads",
+      buffer_gets "Buffer_Gets",
+      executions "Executions",
+      case when rows_processed = 0 then null
+           else round((buffer_gets/nvl(replace(rows_processed,0,1),1)))
+           end "Buffer_gets/rows_proc",
+      round((buffer_gets/nvl(replace(executions,0,1),1))) "Buffer_gets/executions",
+      (elapsed_time/1000000) "Elapsed_Seconds",
+      module "Module"
+ from v$sql s
+order by disk_reads desc nulls last;
+
+ 
+ 
+Top SQL by CPU
+
+select substr(sql_text,1,500) "SQL",
+      (cpu_time/1000000) "CPU_Seconds",
+      disk_reads "Disk_Reads",
+      buffer_gets "Buffer_Gets",
+      executions "Executions",
+      case when rows_processed = 0 then null
+           else round((buffer_gets/nvl(replace(rows_processed,0,1),1)))
+           end "Buffer_gets/rows_proc",
+      round((buffer_gets/nvl(replace(executions,0,1),1))) "Buffer_gets/executions",
+      (elapsed_time/1000000) "Elapsed_Seconds",
+      module "Module"
+ from v$sql s
+order by cpu_time desc nulls last;
+
+ 
+ 
+Top SQL by Executions
+
+select substr(sql_text,1,500) "SQL",
+      (cpu_time/1000000) "CPU_Seconds",
+      disk_reads "Disk_Reads",
+      buffer_gets "Buffer_Gets",
+      executions "Executions",
+      case when rows_processed = 0 then null
+           else round((buffer_gets/nvl(replace(rows_processed,0,1),1)))
+           end "Buffer_gets/rows_proc",
+      round((buffer_gets/nvl(replace(executions,0,1),1))) "Buffer_gets/executions",
+      (elapsed_time/1000000) "Elapsed_Seconds",
+      module "Module"
+ from v$sql s
+order by executions desc nulls last;
+
+ 
+ 
+Top SQL by Waits
+select INST_ID,
+     (cpu_time/1000000) "CPU_Seconds",
+     disk_reads "Disk_Reads",
+     buffer_gets "Buffer_Gets",
+     executions "Executions",
+     case when rows_processed = 0 then null
+          else round((buffer_gets/nvl(replace(rows_processed,0,1),1)))
+          end "Buffer_gets/rows_proc",
+     round((buffer_gets/nvl(replace(executions,0,1),1))) "Buffer_gets/executions",
+     (elapsed_time/1000000) "Elapsed_Seconds",
+     --round((elapsed_time/1000000)/nvl(replace(executions,0,1),1)) "Elapsed/Execution",
+     substr(sql_text,1,500) "SQL",
+     module "Module",SQL_ID
+from gv$sql s
+where sql_id in (
+select distinct sql_id from (
+WITH sql_class AS
+(select sql_id, state, count(*) occur from
+  (select   sql_id
+  ,  CASE  WHEN session_state = 'ON CPU' THEN 'CPU'      
+           WHEN session_state = 'WAITING' AND wait_class IN ('User I/O') THEN 'IO'
+           ELSE 'WAIT' END state           
+    from gv$active_session_history            
+    where   session_type IN ( 'FOREGROUND')       
+    and sample_time  between trunc(sysdate,'MI') - 15/24/60 and trunc(sysdate,'MI') )
+    group by sql_id, state),
+     ranked_sqls AS
+(select sql_id,  sum(occur) sql_occur  , rank () over (order by sum(occur)desc) xrank
+from sql_class          
+group by sql_id )
+select sc.sql_id, state, occur from sql_class sc, ranked_sqls rs
+where rs.sql_id = sc.sql_id
+--and rs.xrank <= 15 
+order by xrank, sql_id, state )) 
+order by elapsed_time desc nulls last; 
+ 
+ 
+ 
+ 
+select s.parsing_schema_name,
+       inst_id,
+       sql_id,
+       plan_hash_value,
+       child_number,
+       round(nullif(s.ELAPSED_TIME, 0) / nullif(s.EXECUTIONS, 0) / 1000000, 4) elap_per_exec,
+       round(s.USER_IO_WAIT_TIME / nullif(s.ELAPSED_TIME, 0) * 100, 2) io_wait_pct,
+       round(s.CLUSTER_WAIT_TIME / nullif(s.ELAPSED_TIME, 0) * 100, 2) cluster_wait_pct,
+       round(s.application_wait_time / nullif(s.ELAPSED_TIME, 0) * 100, 2) app_wait_pct,
+       round(s.CPU_TIME / nullif(s.ELAPSED_TIME, 0) * 100, 2) cpu_time_pct,
+       round(s.PHYSICAL_READ_BYTES / nullif(s.EXECUTIONS, 0) / 1024 / 1024, 2) pio_per_exec_mb,
+       round(s.PHYSICAL_READ_BYTES / nullif(s.PHYSICAL_READ_REQUESTS, 0), 2) / 1024 read_per_request_kbytes,
+       round(s.buffer_gets /  nullif(s.executions, 0), 4) BufferGets_per_Exec,
+       s.executions,
+       to_char(s.last_active_time,'dd/mm/yyyy hh24:mi:ss') last_act_time,
+       s.first_load_time,
+       s.sql_fulltext,             
+       s.sql_profile,
+       s.sql_patch,
+       s.sql_plan_baseline
+FROM   gv$sql s
+WHERE  1=1
+and    s.parsing_schema_name in ('ANGOR')
+order  by s.last_active_time desc;
+ 
+ 
+ 
+ 
+ 
+Используем табличную функцию DBMS_SQLTUNE.SELECT_CURSOR_CACHE:
+ 
+ 
+ 
+SELECT buffer_gets, 
+       executions, 
+       last_exec_start_time, 
+       parsing_schema_name, 
+       module, 
+       action, 
+       sql_id, 
+       plan_hash_value, 
+       sql_text
+FROM table(DBMS_SQLTUNE.SELECT_CURSOR_CACHE('buffer_gets > 500'))
+ORDER BY buffer_gets desc;
+
+
+
+SELECT disk_reads, 
+       executions, 
+       last_exec_start_time, 
+       parsing_schema_name, 
+       module, 
+       action, 
+       sql_id, 
+       plan_hash_value, 
+       sql_text
+FROM table(DBMS_SQLTUNE.SELECT_CURSOR_CACHE('disk_reads > 1000'))
+ORDER BY disk_reads desc;
+
+
+
+SELECT cpu_time / 1000000 as cpu_time_secs, 
+       executions, 
+       last_exec_start_time, 
+       parsing_schema_name, 
+       module, action, 
+       sql_id, 
+       plan_hash_value, 
+       sql_text
+FROM table(DBMS_SQLTUNE.SELECT_CURSOR_CACHE('cpu_time > 10000000'))
+ORDER BY cpu_time desc;
+
+
+
+SELECT elapsed_time / 1000000 as elapsed_time_secs, 
+       executions, 
+       last_exec_start_time, 
+       parsing_schema_name, 
+       module, 
+       action, 
+       sql_id, 
+       plan_hash_value, 
+       sql_text
+FROM table(DBMS_SQLTUNE.SELECT_CURSOR_CACHE('elapsed_time > 100000000'))
+ORDER BY elapsed_time desc;
+
+
+
+SELECT executions, 
+       last_exec_start_time, 
+       parsing_schema_name, 
+       module, action, 
+       sql_id, 
+       plan_hash_value, 
+       sql_text
+FROM table(DBMS_SQLTUNE.SELECT_CURSOR_CACHE('executions > 10000'))
+ORDER BY executions desc;
+
+
+
+SELECT direct_writes, 
+       executions, 
+       last_exec_start_time, 
+       parsing_schema_name, 
+       module, 
+       action, 
+       sql_id, 
+       plan_hash_value, 
+       sql_text
+FROM table(DBMS_SQLTUNE.SELECT_CURSOR_CACHE('direct_writes > 1000'))
+ORDER BY direct_writes desc;
+
+
+
+SELECT rows_processed, 
+       executions, 
+       last_exec_start_time, 
+       parsing_schema_name, 
+       module, 
+       action, 
+       sql_id, 
+       plan_hash_value, 
+       sql_text
+FROM table(DBMS_SQLTUNE.SELECT_CURSOR_CACHE('rows_processed > 10000'))
+ORDER BY rows_processed desc;
+
+
+
+
+
+List out SQL Tuning Set contents to check we got what we wanted
+ 
+ 
+SELECT
+  first_load_time,
+  executions as execs,
+  parsing_schema_name,
+  elapsed_time  / 1000000 as elapsed_time_secs,
+  cpu_time / 1000000 as cpu_time_secs,
+  buffer_gets,
+  disk_reads,
+  direct_writes,
+  rows_processed,
+  fetches,
+  optimizer_cost,
+  sql_plan,
+  plan_hash_value,
+  sql_id,
+  sql_text
+FROM TABLE(DBMS_SQLTUNE.SELECT_SQLSET(sqlset_name => 'SAMPLE_TUNING_SET'));
+
+
+ 
+ 
+ 
+Database Time and Average Active Sessions
+
+Active Session History (ASH) 
+
+Oracle для выборочных активных сеансов каждые 1 секунду в кольцевом буфере в SGA.
+
+
+Можно представить ASH как историю DB time. 
+
+Так как ASH связан с активными сеансами, то мы можем извлечь DB time из ASH: 
+ASH COUNT (*) = DB time.
+
+
+select count(*) DB_TIME_SEC
+  from  v$active_session_history
+where session_type = 'FOREGROUND';
+
+DB_TIME_SEC
+-----------   
+        993 
+
+
+Формула для Average Active Sessions:
+DB Time / Elapsed Time = Average Active Sessions
+
+Данные для активных сеансов доступны из представления V$ACTIVE_SESSION_HISTORY.
+Поскольку данные хранятся в памяти (SGA) в круговом буфере, если у вас очень загруженная система, 
+то возможно, что эти данные будут сброшены на диск в таблицу SYS.DBA_HIST_ACTIVE_SESS_HISTORY, 
+но в неё попадет только 1 из 10 образцов из V$ACTIVE_SESSION_HISTORY.
+
+Так что DB_TIME из DBA_HIST_ACTIVE_SESS_HISTORY, будет ASH COUNT (*) * 10 = DB TIME.
+
+
+Average Active Sessions = DB Time/Elapsed Time
+Если мы хотим рассчитать Average Active Sessions между 09:05 и 09:30 
+т.е. в течение заданного периода в 25 минут (1500 секунд).
+
+DB Time = 3144
+Elapsed Time = 25 minutes = (25 * 60) = 1500 seconds
+Average Active Sessions would be: 3144 / 1500 = 2.096
+
+
+select count(*)  DB_TIME,
+count(*) / (25 * 60) AAS
+from       v$active_session_history
+where      session_type = 'FOREGROUND'
+and sample_time between to_date('08012015 09:05:00','ddmmyyyy hh24:mi:ss') 
+                    and to_date('08012015 09:30:00','ddmmyyyy hh24:mi:ss')
+/
+
+
+   DB_TIME        AAS
+---------- ----------
+      3144      2.096
+
+
+Например, мы можем найти TOP активных sql_id, упорядоченных по DB time:
+
+
+select count(*), sql_id
+from   v$active_session_history
+where  session_type = 'FOREGROUND'
+       and sql_id is not null
+group by sql_id 
+order by 1 desc
+/
+
+
+  COUNT(*) SQL_ID
+---------- -------------
+     29274 3t431hgtbs8t7
+        11 4ztz048yfq32s
+         5 0uuczutvk6jqj
+         3 f5yun5dynkskv
+         2 4mua4wc69sxyf
+         1 2ft0vv13g0xkd
+         1 3y5p8203p74hn
+         1 934ur8r7tqbjx
+         1 459f3z9u4fb3u
+         1 72cjd89q7d2s5
+         1 65gavqa851ymj
+
+11 rows selected.
+
+ 
+ 
+To find the session ids that executed sql with high DB time we can use the following.
+SQL> select count(*), sql_id, session_id
+  2  from   v$active_session_history
+  3  where  session_type = 'FOREGROUND'
+  4         and sql_id is not null
+  5  group by sql_id,session_id 
+  6  order by 1 desc
+  7  /
+
+  COUNT(*) SQL_ID        SESSION_ID
+---------- ------------- ----------
+     14637 3t431hgtbs8t7        135
+     14637 3t431hgtbs8t7        373
+         5 0uuczutvk6jqj        125
+         4 4ztz048yfq32s          5
+         3 4ztz048yfq32s         19
+         3 4ztz048yfq32s          7
+         3 f5yun5dynkskv          7
+         2 4mua4wc69sxyf        125
+         2 65gavqa851ymj          7
+         1 72cjd89q7d2s5        125
+         1 3y5p8203p74hn        374
+         1 934ur8r7tqbjx        125
+         1 459f3z9u4fb3u          5
+         1 2ft0vv13g0xkd        125
+         1 4ztz048yfq32s         14
+
+15 rows selected.
+ 
+ 
+ 
+ 
+DB time 
+ 
+col name format a10
+select statistic#, name, class, value
+from v$sysstat
+where name = 'DB time'
+/
+
+
+STATISTIC# NAME            CLASS      VALUE
+---------- ---------- ---------- ----------
+        20 DB time             1   13828791
+
+
+
+
+select to_char(begin_time,'dd.mm.yyy hh24:mi:ss') begin_time,
+        to_char(end_time,'dd.mm.yyy hh24:mi:ss') end_time,
+        intsize_csec interval_size,
+        group_id,
+        metric_name,
+        value
+ from   v$sysmetric
+where  metric_name = 'Database Time Per Sec'
+/
+
+BEGIN_TIME         END_TIME           INTERVAL_SIZE   GROUP_ID METRIC_NAME                    VALUE
+------------------ ------------------ ------------- ---------- ------------------------- ----------
+09.01.015 10:25:48 09.01.015 10:26:48          6001          2 Database Time Per Sec     .296650558
+09.01.015 10:27:03 09.01.015 10:27:18          1500          3 Database Time Per Sec     .300146667
+
+ 
+ 
+ 
+There are 2 records for two different groups because of short duration and long duration intervals.
+
+System Metrics Long Duration (group_id= 2) : 60 second interval
+System Metrics Short Duration (group_id = 3) : 15 second interval
+
+V$SYSMETRIC_SUMMARY (with appropriate DBA_HIST_SYSMETRIC_SUMMARY for on disk snapshots) contains long duration metric 
+(1 hour interval) information such as avg,min,max.
+
+SQL> select maxval,minval,average,standard_deviation
+  2  from v$sysmetric_summary
+  3  where metric_name = 'Database Time Per Sec'
+  4  /
+
+    MAXVAL     MINVAL    AVERAGE STANDARD_DEVIATION
+---------- ---------- ---------- ------------------
+3.12933844          0 .282698591         .595884377
+
+V$SYSMETRIC_HISTORY (with appropriate DBA_HIST_SYSMETRIC_SUMMARY on disk snapshots) contains short duration and long duration metrics.
+
+
+
+
+ 
+Примеры использования V$ACTIVE_SESSION_HISTORY:
+ 
+ 
+ 
+SELECT *
+  FROM V$ACTIVE_SESSION_HISTORY
+ WHERE sample_time > sysdate - 1 
+   AND session_type <> 'BACKGROUND';  
+  
+   
+ 
+ 
+SELECT *
+  FROM V$ACTIVE_SESSION_HISTORY
+ WHERE sample_time BETWEEN TO_DATE('2018-09-03 00:00:00','YYYY-MM-DD HH24:MI:SS') 
+                       AND TO_DATE('2018-09-03 23:59:59','YYYY-MM-DD HH24:MI:SS')
+   AND session_type <> 'BACKGROUND'; 
+ 
+ 
+ 
+ 
+SELECT sql_id
+      ,session_id,session_serial#
+      ,COUNT(*)  seconds
+ FROM  v$active_session_history
+WHERE sample_time  > SYSDATE-1/24/12
+AND sql_id  = '2vp4k2kgy2wm4'
+GROUP BY sql_id, session_id,session_serial#
+ORDER BY seconds  DESC;
+/
+ 
+ 
+ 
+SELECT sql_id, 
+       session_id,
+       session_serial#, 
+       COUNT(*) seconds
+FROM   v$active_session_history
+WHERE  sample_time > SYSDATE-1/24/12
+AND sql_id = '2vp4k2kgy2wm4'
+GROUP BY sql_id, session_id, session_serial#
+ORDER BY seconds DESC;
+ 
+ 
+ 
+SELECT * FROM DBA_HIST_SQLTEXT HIST_SQLTEXT 
+WHERE sql_id IN 
+(
+ SELECT sql_id
+  FROM V$ACTIVE_SESSION_HISTORY
+ WHERE sample_time > sysdate - 1 
+   AND session_type <> 'BACKGROUND' 
+   AND sql_id is not NULL
+);
+ 
+  
+ 
+select NVL(sql_id,'NULL') as sql_id
+      ,count(*)           as DB_time
+      ,ROUND(100*count(*)/SUM(count(*)) OVER (), 2) as Pct_load
+  from v$active_session_history 
+ where sample_time > sysdate - 5/24/60
+   and session_type <> 'BACKGROUND'
+ group by sql_id
+ order by count(*) desc;
+/
+
+
+ 
+select NVL(event,'NULL') as event
+       ,count(*)         as samples
+       ,ROUND(count(*)/600,4) as AvgActiveSess
+  from v$active_session_history
+ where sql_id IS NULL
+   and sample_time > sysdate - 10/24/60
+   and session_type <> 'BACKGROUND'
+group by event; 
+ 
+ 
+ 
+select inst_id as instance
+      ,event
+      ,COUNT(distinct current_obj#) as objcount
+      ,SUM(1) as dbtime_secs
+ from gv$active_session_history
+where sample_time > sysdate - 1/24/60 -- pick up last minute only
+  and wait_class = 'User I/O' 
+group by inst_id,event
+order by event,instance; 
+ 
+ 
+ 
+SELECT sql_id, 
+  count(*), 
+  round(count(*) / sum(count(*)) over(), 2) pctload
+FROM V$ACTIVE_SESSION_HISTORY
+WHERE sample_time > sysdate - 1/ (24 * 60)
+  AND session_type <> 'BACKGROUND'
+  AND session_state = 'ON CPU'
+GROUP BY sql_id
+ORDER BY count(*) desc; 
+ 
+ 
+ 
+SELECT ash.sql_id,
+  count(*)
+FROM V$ACTIVE_SESSION_HISTORY ASH,V$EVENT_NAME EVT
+WHERE ash.sample_time > sysdate -1/(24*60)
+  AND ash.session_state = 'WAITING'
+  AND ash.event_id = evt.event_id
+  AND evt.wait_class = 'USER I/O'
+GROUP BY ash.sql_id
+ORDER BY count(*) desc; 
+ 
+ 
+ 
+SELECT session_id,
+  count(*)
+  FROM V$ACTIVE_SESSION_HISTORY
+WHERE session_state = 'ON CPU'
+  AND sample_time > sysdate -1/(24*60)
+GROUP BY session_id
+ORDER BY count(*) desc;
+ 
+ 
+ 
+Current CPU usage by this instance
+select round(100*num_cpus_in_use/num_cpus_total,1) cpu_usage_pct
+from
+(
+    select count(*) num_cpus_in_use
+    from v$active_session_history
+    where sample_time =
+        (select max(sample_time)
+         from v$active_session_history
+        )
+    and session_state = 'ON CPU'
+),
+(select value num_cpus_total
+ from v$osstat
+ where stat_name = 'NUM_CPUS'
+) num_cpus;
+
+
+ 
+ 
+Top 5 events for an arbitrary interval
+
+select *
+from
+(
+    select nvl(event, session_state) event,
+           round(100*count(*)/
+              (sum(count(1)) over ()), 2) "DB time (%)"
+    from v$active_session_history
+    where sample_time between to_date(:start_time, 'dd-mon-yyyy hh24:mi:ss')
+                      and to_date(:end_time, 'dd-mon-yyyy hh24:mi:ss')
+    group by nvl(event, session_state)
+    order by count(*) desc
+)
+where rownum<=5;
+
+
+ 
+ 
+Database activity as a function of time
+select sample_time time,
+       count(*) activity
+from v$active_session_history
+group by sample_time
+order by sample_time;
+
+
+ 
+ 
+Wait profile for a single SQL statement
+select nvl(event, session_state) event,
+       round(100*count(*)/
+         (sum(count(1)) over ()), 2) "% query time"
+from dba_hist_active_sess_history
+where sql_id = :sql_id
+group by nvl(event, session_state)
+order by count(*) desc;
+
+
+ 
+ 
+Top SQL for a module
+
+select nvl(ash.sql_id, 'N/A') sql_id,
+       replace(nvl(txt.sql_text_short, 'N/A'), chr(10), '\n') sql_text,
+       count(*) "DB time(s)",
+       round(100*count(*)/
+         sum(count(1)) over(), 2) "DB time(%)"
+from v$active_session_history ASH,
+     (select sql_id,
+             dbms_lob.substr(sql_text, :len) sql_text_short
+      from v$sql
+      union all
+      select sql_id,
+             dbms_lob.substr(sql_text, :len) sql_text_short
+      from dba_hist_sqltext      ) txt
+where ash.sql_id = txt.sql_id (+)
+and module = :module
+group by ash.sql_id, txt.sql_text_short
+order by count(*) desc;
+
+
+ 
+ 
+Profiling PL/SQL calls in a module
+
+select P.OBJECT_NAME ||
+          case when p.object_name is not null
+                      and p.procedure_name is not null
+               then '.'
+          end ||
+          P.PROCEDURE_NAME top_plsql_object_name,
+          count(*) "DB time (s)"
+from v$active_session_history ash,
+dba_procedures p
+where ASH.PLSQL_ENTRY_OBJECT_ID = P.OBJECT_ID (+)
+and ASH.PLSQL_ENTRY_SUBPROGRAM_ID = P.SUBPROGRAM_ID (+)
+and module = :module
+group by p.object_name, p.procedure_name
+order by count(*) desc;
+
+
+ 
+ 
+Accessed objects
+This query gives the breakdown of DB time within the interval of interest by database objects accessed.
+select nvl(o.owner ||
+         case when o.object_name is not null
+              then '.'
+         end                 ||
+        o.object_name, 'N/A') object_name,
+        round(100*count(*)/
+           sum(count(1)) over (), 2) "DB time (%)"
+from dba_hist_active_SESS_HISTORY ash,
+     dba_objects o
+where ash.CURRENT_OBJ# = o.object_id (+)
+and ash.sample_time between to_date(:start_period, 'dd-mon-yyyy hh24:mi:ss')
+                    and to_date(:end_period, 'dd-mon-yyyy hh24:mi:ss')
+group by o.owner || case when o.object_name is not null
+                    then '.' end
+                 || o.object_name
+order by count(*) desc;
+
+
+ 
+ 
+Datafile access during last N hours
+
+select nvl(f.file_name, 'not in I/O waits'),
+       10*count(*) "DB time (s)",
+       round(100*count(*)/
+         sum(count(1)) over (), 2) "DB time (%)"
+from DBA_HIST_ACTIVE_SESS_HISTORY ash,
+     DBA_DATA_FILES f where ash.current_file# = f.file_id (+)
+and ash.sample_time > sysdate - :hours/24
+group by f.file_name
+order by count(*) desc;
+
+
+ 
+ 
+Breakdown of query DB time by plan operations
+
+SELECT ash.sql_plan_line_id,
+       ash.sql_plan_operation,
+       ash.sql_plan_options,
+       p.object_name,
+       round(100*COUNT(*)/
+          sum(count(1)) over(), 2) "% time"
+FROM v$active_session_history ash,
+        v$sql_plan p
+WHERE ash.sql_id = p.sql_id
+AND ash.sql_plan_hash_value = p.plan_hash_value
+AND ash.sql_plan_line_id = P.id
+AND ash.sql_id = :sql_id
+AND ash.sql_plan_hash_value = :plan_hash_value
+GROUP BY ASH.SQL_PLAN_LINE_ID,
+         ASH.SQL_PLAN_OPERATION,
+         ASH.SQL_PLAN_OPTIONS,
+         p.object_name
+ORDER BY count(*) DESC;
+
+
+
+ 
+ 
+Long-running queries at a specific moment in time
+select distinct sql_ID,
+       24*60*60*(sysdate - sql_exec_start) seconds_running
+FROM v$active_session_history
+where sample_time =  (select max(sample_time)
+                      from v$active_session_history
+                      where sample_time < to_date(:time,
+                           'dd-mon-yyyy hh24:mi'))
+and sql_id is not null
+order by 24*60*60*(sysdate - sql_exec_start) desc;
+
+
+ 
+ 
+Time model statistics query
+
+This query gives breakdown of DB time by session state, similar to the time model statistics section of the AWR report.
+select status,
+        round(100*count(*)/
+                   sum(count(1)) over(), 2) "% DB time"
+from
+(
+    select case when in_connection_mgmt='Y'
+                  then 'IN_CONNECTION_MGMT'
+                when in_parse = 'Y'
+                  then 'IN_PARSE'
+                when in_hard_parse = 'Y'
+                  then 'IN_HARD_PARSE'
+                when in_sql_execution = 'Y'
+                  then 'IN_sql_execution'
+                when in_plsql_execution = 'Y'
+                  then 'IN_plsql_execution'
+                when in_plsql_compilation = 'Y'
+                  then 'IN_plsql_compilation'
+                when in_plsql_rpc = 'Y'
+                  then 'IN_plsql_rpc'
+                when in_java_execution = 'Y'
+                  then 'IN_JAVA_EXECUTION'
+                when in_bind = 'Y'
+                  then 'IN_BIND'
+                when in_cursor_close = 'Y'
+                  then 'IN_CURSOR_CLOSE'
+                when in_sequence_load = 'Y'
+                  then 'IN_SEQUENCE_LOAD'
+                else 'N/A'
+           end status
+    FROM dba_hist_active_sess_history
+)
+group by status
+order by count(*) desc;
+
+
+
+ 
+SQL statements consuming most PGA at a specific time
+
+select ash.sql_id,
+       replace(nvl(txt.sql_text_short, 'N/A'),
+               chr(10), '\n'
+               ) sql_text,
+       round(ASH.PGA_ALLOCATED/1024/1024) pga_mb
+from dba_hist_active_sess_history ash,
+     (
+        select sql_id, dbms_lob.substr(sql_text, :len) sql_text_short
+        from v$sql
+        union all
+        select sql_id, dbms_lob.substr(sql_text, :len) sql_text_short
+        from dba_hist_sqltext
+     ) txt
+where ash.sql_id = txt.sql_id (+)
+and ash.sql_id is not null
+and ash.sample_time = (select max(sample_time)
+                     from dba_hist_active_sess_history
+                     where sample_time < to_date(:time, 'dd-mon-yyyy hh24:mi:ss'))
+order by ash.pga_allocated desc;
+
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+SELECT ash.sql_id,
+  sum(decode(ash.session_state,'ON CPU',1,0)) "CPU",
+  sum(decode(ash.session_state,'WAITING',1,0)) -
+  sum(decode(ash.session_state,'WAITING',decode(en.wait_class,'USER I/O',1,0),0)) "WAIT",
+  sum(decode(ash.session_state,'WAITING',decode(en.wait_class,'USER I/O',1,0),0)) "IO",
+  sum(decode(ash.session_state,'ON CPU',1,1)) "TOTAL"
+  FROM V$ACTIVE_SESSION_HISTORY ASH,V$EVENT_NAME EN
+WHERE SQL_ID is not null and en.event#=ash.event# and ash.sample_time > sysdate -1/(24*60)
+GROUP BY ash.sql_id
+ORDER BY sum(decode(ash.session_state,'ON CPU',1,1)) desc;
+
+
+SELECT ash.session_id,   
+ash.session_serial#,   
+ash.user_id,   
+ash.program,   
+sum(decode(ash.session_state,'ON CPU',1,0)) "CPU",   
+sum(decode(ash.session_state,'WAITING',1,0)) - sum(decode(ash.session_state,'WAITING',decode(en.wait_class,'USER I/O',1,0),0)) "WAITING",   
+sum(decode(ash.session_state,'WAITING',decode(en.wait_class,'USER I/O',1,0),0)) "IO",   
+sum(decode(ash.session_state,'ON CPU',1,1)) "TOTAL" 
+FROM V$ACTIVE_SESSION_HISTORY ASH,V$EVENT_NAME EN 
+WHERE en.event# = ash.event# 
+and ash.sample_time > sysdate -1/(24*60) 
+GROUP BY ash.session_id,ash.user_id,ash.session_serial#,ash.program 
+ORDER BY sum(decode(ash.session_state,'ON CPU',1,1));   
+ 
+ 
+ 
+ 
+TOP SQL:
+
+SET LONG 2000;
+
+SELECT ALL_USERS.username AS user_name,
+       V$SQL.module,
+       V$SQL.sql_text,
+       V$SQL.sql_fulltext,
+       NVL(TOP_SQLS.sql_id,'NULL') AS sql_id,
+       ROUND(pct_load, 1) AS pct_load
+FROM(
+    SELECT user_id,
+           sql_id, 
+           count(*),
+           count(*)*100/SUM(count(*)) OVER() AS PCT_LOAD
+     FROM V$ACTIVE_SESSION_HISTORY     
+    WHERE sample_time > sysdate - 1/24
+    GROUP BY user_id, sql_id
+    )TOP_SQLS,
+     V$SQL,
+     ALL_USERS
+WHERE V$SQL.sql_id(+) = TOP_SQLS.sql_id
+  AND ALL_USERS.user_id(+) = TOP_SQLS.user_id
+  AND pct_load > 1
+  AND username <> 'SYS'
+ORDER BY pct_load DESC; 
+ 
+ 
+ 
+select SQL_ID,round(PGA_MB,1) PGA_MB,
+       percent,
+       rpad('*',percent*10/100,'*') star
+from (select SQL_ID,
+             sum(DELTA_PGA_MB) PGA_MB ,
+             (ratio_to_report(sum(DELTA_PGA_MB)) over ())*100 percent,
+             rank() over(order by sum(DELTA_PGA_MB) desc) rank
+      from (select SESSION_ID,
+                   SESSION_SERIAL#,
+                   sample_id,
+                   SQL_ID,
+                   SAMPLE_TIME,
+                   IS_SQLID_CURRENT,
+                   SQL_CHILD_NUMBER,
+                   PGA_ALLOCATED,
+                   greatest(PGA_ALLOCATED - first_value(PGA_ALLOCATED) over (partition by SESSION_ID,SESSION_SERIAL# order by sample_time rows 1 preceding),0)/power(1024,2) "DELTA_PGA_MB"
+            from  v$active_session_history
+            where IS_SQLID_CURRENT='Y'
+              and sample_time > sysdate-60/86400
+              order by 1,2,3,4
+           )
+group by sql_id
+having sum(DELTA_PGA_MB) > 0
+)
+where rank < 11
+order by rank;
+/
+ 
+ 
+ 
+select SQL_ID,
+       TEMP_MB,
+       percent,
+       rpad('*',percent*10/100,'*') star
+from(select SQL_ID,
+            sum(DELTA_TEMP_MB) TEMP_MB ,
+            (ratio_to_report(sum(DELTA_TEMP_MB)) over ())*100 percent,rank() over(order by sum(DELTA_TEMP_MB) desc) rank
+     from(select SESSION_ID,
+                 SESSION_SERIAL#,
+                 sample_id,
+                 SQL_ID,
+                 SAMPLE_TIME,
+                 IS_SQLID_CURRENT,
+                 SQL_CHILD_NUMBER,
+                 temp_space_allocated,
+                 greatest(temp_space_allocated - first_value(temp_space_allocated) over (partition by SESSION_ID,SESSION_SERIAL# order by sample_time rows 1 preceding),0)/power(1024,2) "DELTA_TEMP_MB"
+          from v$active_session_history
+         where IS_SQLID_CURRENT='Y'
+           and sample_time > sysdate-1
+         order by 1,2,3,4
+         )
+group by sql_id
+having sum(DELTA_TEMP_MB) > 0
+)
+where rank < 11
+order by rank;
+/
+ 
+ 
+ 
+select ash.sql_id,
+       ash.event,
+       trunc(sum(TM_DELTA_TIME) / 1000000,2) TM_DELTA_TIME,
+       trunc(sum(TM_DELTA_CPU_TIME) / 1000000,2) TM_DELTA_CPU_TIME,
+       trunc(sum(TM_DELTA_DB_TIME) / 1000000,2) TM_DELTA_DB_TIME,
+       SUM(DELTA_READ_IO_REQUESTS) DELTA_READ_IO_REQUESTS,
+       SUM(DELTA_WRITE_IO_REQUESTS),
+       trunc(SUM(DELTA_READ_IO_BYTES)/1024/1024,2) DELTA_READ_IO_M,
+       trunc(SUM(DELTA_WRITE_IO_BYTES)/1024/1024,2) DELTA_WRITE_IO_M,
+       trunc(SUM(DELTA_INTERCONNECT_IO_BYTES)/1024/1024,2) DELTA_INTERCONNECT_IO_M,
+       sum(decode(ash.session_state,'ON CPU',1,0)) "CPU", 
+       trunc(sum(decode(ash.session_state,'WAITING',1,0)) -
+       trunc(sum(decode(ash.session_state,'WAITING',decode(en.wait_class,'USER I/O',1,0),0))),2) "WAITING",
+       trunc(sum(decode(ash.session_state,'WAITING',decode(en.wait_class,'USER I/O',1,0),0)),2) "IO",
+       trunc(sum(decode(ash.session_state,'ON CPU',1,1)),2) "TOTAL"
+  from v$active_session_history ash,V$EVENT_NAME EN
+ where ash.sample_id > 190681
+   and ash.sample_id < (190681 + 2527)
+   AND ash.event#=en.event#(+)
+ group by ash.sql_id, ash.event
+ order by 2 desc;
+ 
+ 
+ 
+ 
+ 
+SQL execution history (ASH)
+set linesize 230
+set pagesize 9999
+
+select cpu_time_delta,
+       elapsed_time_delta,
+       iowait_delta,
+       plan_hash_value, 
+       EXECUTIONS_DELTA, 
+       round(elapsed_time_delta/EXECUTIONS_DELTA/1000/1000, 4) avg_exec_time_sec,
+       (select to_char(end_interval_time, 'dd/mm/yyyy hh24:mi') 
+          from dba_hist_snapshot hs 
+         where hs.snap_id = a.snap_id) end_date 
+from  dba_hist_sqlstat a, 
+      dba_hist_sqltext b 
+where a.sql_id=b.sql_id and 
+ snap_id in (select distinct snap_id from dba_hist_snapshot where end_interval_time>=sysdate-&days_back)
+ and a.sql_id = '&sql_id'
+ and EXECUTIONS_DELTA != 0
+ order by snap_id; 
+ 
+ 
+ 
+ 
+ 
+SELECT
+  sysmetric_history.sample_time,
+  cpu,
+  bcpu,
+  DECODE(SIGN((cpu+bcpu)-cpu_ora_consumed), -1, 0, ((cpu+bcpu)-cpu_ora_consumed)) AS cpu_ora_wait,
+  scheduler,
+  uio,
+  sio,
+  concurrency,
+  application,
+  COMMIT,
+  configuration,
+  administrative,
+  network,
+  queueing,
+  clust,
+  other
+FROM
+  (SELECT
+     TRUNC(sample_time,'MI') AS sample_time,
+     SUM(DECODE(session_state,'ON CPU',DECODE(session_type,'BACKGROUND',0,1),0))/60 AS cpu,
+     SUM(DECODE(session_state,'ON CPU',DECODE(session_type,'BACKGROUND',1,0),0))/60 AS bcpu,
+     SUM(DECODE(wait_class,'Scheduler',1,0))/60 AS scheduler,
+     SUM(DECODE(wait_class,'User I/O',1,0))/60 AS uio,
+     SUM(DECODE(wait_class,'System I/O',1,0))/60 AS sio,
+     SUM(DECODE(wait_class,'Concurrency',1,0))/60 AS concurrency,
+     SUM(DECODE(wait_class,'Application',1,0))/60 AS application,
+     SUM(DECODE(wait_class,'Commit',1,0))/60 AS COMMIT,
+     SUM(DECODE(wait_class,'Configuration',1,0))/60 AS configuration,
+     SUM(DECODE(wait_class,'Administrative',1,0))/60 AS administrative,
+     SUM(DECODE(wait_class,'Network',1,0))/60 AS network,
+     SUM(DECODE(wait_class,'Queueing',1,0))/60 AS queueing,
+     SUM(DECODE(wait_class,'Cluster',1,0))/60 AS clust,
+     SUM(DECODE(wait_class,'Other',1,0))/60 AS other
+   FROM v$active_session_history
+   WHERE sample_time>sysdate- INTERVAL '1' HOUR
+   AND sample_time<=TRUNC(SYSDATE,'MI')
+   GROUP BY TRUNC(sample_time,'MI')) ash,
+  (SELECT
+     TRUNC(begin_time,'MI') AS sample_time,
+     VALUE/100 AS cpu_ora_consumed
+   FROM v$sysmetric_history
+   WHERE GROUP_ID=2
+   AND metric_name='CPU Usage Per Sec') sysmetric_history
+WHERE ash.sample_time (+)=sysmetric_history.sample_time
+ORDER BY sample_time;
+ 
+ 
+ 
+ 
+Top 20 resource intensive SQLs for today
+ 
+
+SELECT * 
+FROM 
+   (SELECT RANK () OVER (PARTITION BY "Snap Day" ORDER BY "CPU Time"+"Disk Reads"+"Buffer Gets"+"Writes"+"Sorts"+"Parses" DESC) AS "Rank", 
+           i1.* 
+    FROM (SELECT TO_CHAR (hs.begin_interval_time,'MM/DD/YY') "Snap Day", 
+                 shs.sql_id "Sql id", 
+                 REPLACE(CAST(DBMS_LOB.SUBSTR(sht.sql_text,40) AS VARCHAR (40)),CHR (10),'') "Sql", 
+                 SUM(shs.executions_delta) "Execs",ROUND((SUM(shs.elapsed_time_delta)/1000000)/SUM (shs.executions_delta),1) "Time Ea Sec", 
+                 ROUND((SUM(shs.cpu_time_delta)/1000000)/SUM (shs.executions_delta),1) "CPU Ea Sec", 
+                 ROUND((SUM(shs.iowait_delta)/1000000)/SUM (shs.executions_delta),1) "IO/Wait Ea Sec", 
+                 SUM(shs.cpu_time_delta) "CPU Time", 
+                 SUM(shs.disk_reads_delta) "Disk Reads", 
+                 SUM(shs.buffer_gets_delta) "Buffer Gets", 
+                 SUM(shs.direct_writes_delta) "Writes", 
+                 SUM(shs.parse_calls_delta) "Parses", 
+                 SUM(shs.sorts_delta) "Sorts", 
+                 SUM(shs.elapsed_time_delta) "Elapsed" 
+            FROM dba_hist_sqlstat shs INNER JOIN dba_hist_sqltext sht 
+                 ON (sht.sql_id = shs.sql_id) 
+                 INNER JOIN dba_hist_snapshot hs 
+                 ON (shs.snap_id = hs.snap_id) 
+            HAVING SUM (shs.executions_delta) > 0 
+            GROUP BY shs.sql_id,TO_CHAR(hs.begin_interval_time,'MM/DD/YY'),CAST(DBMS_LOB.SUBSTR(sht.sql_text,40) AS VARCHAR (40)) 
+            ORDER BY "Snap Day" DESC) i1 
+ORDER BY "Snap Day" DESC) 
+WHERE "Rank" <= 20 
+      AND "Snap Day"=TO_CHAR(SYSDATE-1,'MM/DD/YY'); 
+ 
+  
+ 
+ 
+ 
+History of running sessions between 2 dates (dd/mm/yyyy hh24:mi)
+ 
+
+set linesize 250
+set verify off
+set pagesize 9999
+
+COLUMN Time      FORMAT a20            HEADING 'Sample time'
+COLUMN Username       FORMAT a12            HEADING 'User name'
+COLUMN Session_id    FORMAT 99999          HEADING 'Sess ID'
+COLUMN sql_id    FORMAT a14            HEADING 'SQL ID'
+COLUMN program   FORMAT a33            HEADING 'Program'
+COLUMN module    FORMAT a20            HEADING 'Module'
+COLUMN event    FORMAT a25            HEADING 'Event name'
+COLUMN time_waited   FORMAT 999,999,999    HEADING 'Time waited'
+COLUMN owner1  FORMAT a15            HEADING 'Owner 1'
+COLUMN object_name FORMAT a15            HEADING 'Object name 1'
+COLUMN owner1  FORMAT a15            HEADING 'Owner 2'
+COLUMN p2  FORMAT a15            HEADING 'Object name 2'
+
+SELECT to_char(h.SAMPLE_TIME, 'dd/mm/yyyy hh24:mi:ss') time, 
+       u.username, 
+       h.blocking_session block_sid, 
+       h.session_id, 
+       h.sql_id, 
+       h.program, 
+       h.module, 
+       h.event, 
+       h.time_waited, 
+       o.owner, 
+       o.object_name, 
+       o1.owner, 
+       o1.object_name p2
+FROM  DBA_HIST_ACTIVE_SESS_HISTORY h, 
+      DBA_OBJECTS o, 
+      dba_users u, 
+      dba_objects o1
+where sample_time between to_date('&begin_date', 'dd/mm/yyyy hh24:mi') and to_date('&end_date', 'dd/mm/yyyy hh24:mi')
+  and session_type != 'BACKGROUND'
+  and o.object_id (+) = h.CURRENT_OBJ#
+  and h.p2 = o1.object_id (+)
+  and time_waited > 0
+  and u.user_id = h.user_id
+  and upper(event) like upper('%&EVENT_TO_FIND%')
+order by sample_id, sample_time;
+/
+
+
+
+
+
+Sessions history for last NNN minutes
+
+ 
+set linesize 250
+set verify off
+set pagesize 9999
+
+COLUMN Time        FORMAT a24            HEADING 'Sample time'
+COLUMN User_id            FORMAT 99999          HEADING 'User ID'
+COLUMN Session_id            FORMAT 99999          HEADING 'Sess ID'
+COLUMN sql_id     FORMAT a14            HEADING 'SQL ID'
+COLUMN program     FORMAT a33            HEADING 'Program'
+COLUMN module     FORMAT a33            HEADING 'Module'
+COLUMN event      FORMAT a25            HEADING 'Event name'
+COLUMN time_waited           FORMAT 999,999,999    HEADING 'Time waited'
+COLUMN owner   FORMAT a15            HEADING 'Owner'
+COLUMN object_name  FORMAT a35            HEADING 'Object name'
+
+SELECT to_char(h.SAMPLE_TIME, 'dd/mm/yyyy hh24:mi:ss') time, 
+       h.user_id, 
+       h.session_id, 
+       h.sql_id, 
+       h.program, 
+       h.module, 
+       h.event, 
+       h.time_waited, 
+       o.owner, 
+       o.object_name
+FROM  v$ACTIVE_SESSION_HISTORY h, 
+      DBA_OBJECTS o
+where sample_time between sysdate-1/(24*60/&MINUTES_BACK) and sysdate
+  and session_type != 'BACKGROUND'
+  and o.object_id (+) = h.CURRENT_OBJ#
+  and time_waited > 0
+  and upper(event) like upper('%&EVENT_TO_FIND%')
+order by sample_id, sample_time;
+/
+ 
+ 
+ 
+Blocking history:
+
+SELECT  distinct a.sql_id, a.blocking_session,a.blocking_session_serial#,
+a.user_id,s.sql_text,a.module
+FROM  V$ACTIVE_SESSION_HISTORY a, v$sql s
+where a.sql_id=s.sql_id
+and blocking_session is not null
+and a.user_id <> 0 
+and a.sample_time between to_date('17/06/2011 00:00', 'dd/mm/yyyy hh24:mi') 
+and to_date('17/06/2011 23:50', 'dd/mm/yyyy hh24:mi');
+
+
+ 
+Top 10 SQL_ID's for the last 7 days as identified by ADDM
+
+col SQL_ID form a16
+col Benefit form 9999999999999
+
+select * from (
+select b.ATTR1 as SQL_ID, max(a.BENEFIT) as "Benefit" 
+from DBA_ADVISOR_RECOMMENDATIONS a, DBA_ADVISOR_OBJECTS b 
+where a.REC_ID = b.OBJECT_ID
+and a.TASK_ID = b.TASK_ID
+and a.TASK_ID in (select distinct b.task_id
+from dba_hist_snapshot a, dba_advisor_tasks b, dba_advisor_log l
+where a.begin_interval_time > sysdate - 7 
+and  a.dbid = (select dbid from v$database) 
+and a.INSTANCE_NUMBER = (select INSTANCE_NUMBER from v$instance) 
+and to_char(a.begin_interval_time, 'yyyymmddHH24') = to_char(b.created, 'yyyymmddHH24') 
+and b.advisor_name = 'ADDM' 
+and b.task_id = l.task_id 
+and l.status = 'COMPLETED') 
+and length(b.ATTR4) > 1 group by b.ATTR1
+order by max(a.BENEFIT) desc) where rownum < 6;
+ 
+ 
+ 
+ 
+alter session set nls_date_format='YYYY:MM:DD:HH24:MI:SS';
+select M.end_time
+      ,ROUND(M.value / 100,3) as Metric_AAS
+      ,ROUND(SUM(DECODE(A.session_type,'FOREGROUND',1,0))/((M.end_time - M.begin_time) * 86400 ),3) as ASH_AAS
+      ,COUNT(1)   as ASH_count
+  from v$active_session_history  A
+      ,v$sysmetric_history       M
+ where A.sample_time between M.begin_time and M.end_time
+   and M.metric_name = 'Database Time Per Sec'  -- 10g metric
+   and M.group_id = 2
+ group by M.end_time,M.begin_time, M.value
+ order by M.end_time;
+/ 
+ 
+ 
+ 
+ 
+Какие объекты ожидались дольше вмего за последние 15 минут
+
+select o.owner, o.object_name, o.object_type, a.event,
+sum(a.wait_time + a.time_waited) total_wait_time
+from v$active_session_history a, dba_objects o
+where a.sample_time between sysdate-30/2880 and sysdate
+and a.current_obj# = o.object_id
+group by o.owner, o.object_name, o.object_type, a.event
+order by total_wait_time desc;
+
+ 
+ 
+Какие события ожидания экземпляра были в топе за последние 15 минут
+select a.event,
+sum(a.wait_time + a.time_waited) total_wait_time
+from v$active_session_history a
+where a.sample_time between sysdate-30/2880 and sysdate
+group by a.event
+order by total_wait_time desc;
+
+ 
+ 
+Какие пользователи дольше всего ждали за последние 15 мин
+
+select s.sid, s.username,
+sum(a.wait_time + a.time_waited) total_wait_time
+from v$active_session_history a, v$session s
+where a.sample_time between sysdate-30/2880 and sysdate
+and a.session_id = s.sid
+group by s.sid, s.username
+order by total_wait_time desc;
+
+ 
+ 
+Какие SQL- запросы выполнялись дольше всего за последние 15 мин
+
+select a.user_id, d.username, s.sql_text,
+sum(a.wait_time + a.time_waited) total_wait_time
+from v$active_session_history a, v$sqlarea s, dba_users d
+where a.sample_time between sysdate-30/2880 and sysdate
+and a.sql_id = s.sql_id
+and a.user_id = d.user_id
+group by a.user_id, s.sql_text, d.username
+order by total_wait_time desc;
+
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+В EM GRID CONTROL
+
+В окне активных сеансов можно наблюдать DB time сессий сгруппированных по различным критериям:
+
+select ... count(*)   
+
+where sample_time between ...
+
+group by sample_time
+
+group by wait_class
+
+group by sql_id
+
+group by session_id, username
+ 
+ 
+ 
+ 
+Можно написать такой скрипт: 
+ 
+ashtop.sql
+
+
+SELECT
+&1
+, COUNT(*)  "TotalSeconds"
+, SUM(CASE WHEN wait_class IS NULL           THEN 1 ELSE 0 END) "CPU"
+, SUM(CASE WHEN wait_class ='User I/O'       THEN 1 ELSE 0 END) "User I/O"
+, SUM(CASE WHEN wait_class ='Application'    THEN 1 ELSE 0 END) "Application"
+, SUM(CASE WHEN wait_class ='Concurrency'    THEN 1 ELSE 0 END) "Concurrency"
+, SUM(CASE WHEN wait_class ='Commit'         THEN 1 ELSE 0 END) "Commit"
+...  ...
+, SUM(CASE WHEN wait_class ='Queueing' THEN 1 ELSE 0 END) "Queueing"
+, SUM(CASE WHEN wait_class ='Other'  THEN 1 ELSE 0 END) "Other"
+FROM v$active_session_history a , dba_users u
+WHERE a.user_id = u.user_id(+)
+AND &2
+AND sample_time BETWEEN &3 AND &4
+GROUP BY &1 
+ORDER BY "TotalSeconds" DESC, &1
+
+
+SQL> @ashtop    
+
+SQL> @ashtop username,sql_id session_type='FOREGROUND' sysdate-1/24 sysdate
+
+SQL> @ashtop session_state,event sql_id='c13sma6rkr27c' sysdate-1/24 sysdate
+
+SQL> @ashtop event,blocking_session_status,blocking_inst_id,blocking_session,blocking_session_serial# "wait_class in ('Concurrency','Cluster')"  sysdate-1/24  sysdate
+
+SQL> @ashtop sql_id  "session_id=201  and session_serial#=2045"  sysdate-1/24 sysdate
+
+SQL> @ashtop sql_plan_hash_value  "session_id=201  and session_serial#=2045"  sysdate-1/24 sysdate
+
+SQL> @ash/time_modelusername  "session_id=201  and session_serial#=2045"  sysdate-1/24 sysdate
+
+SQL> @ash/time_model_phases sql_id  "session_id=201 and session_serial#=2045" sysdate-1/24/60  sysdate
+
+SQL> @ash/time_model_phases sql_id,session_state,event "session_id=201 and session_serial#=2045" sysdate-1/24/60 sysdate
+
+SQL> @ashtop username,program "event='log file sync'" sysdate-1/24 sysdate
+
+SQL> @ashtop event,blocking_session_status,blocking_session,blocking_session_serial# wait_class='Application' sysdate-1/24 sysdate
+
+SQL> @ashtop event,blocking_session_status,blocking_session wait_class='Concurrency' sysdate-1/24 sysdate
+
+SQL> @ashtop p1text,p1,p2text,p2,p3text,p3 "event='buffer  busy waits'" sysdate-1/24 sysdate
+
+SQL> @ashtop p1text,p1,p2text,TO_NUMBER(TRIM(SUBSTR(TO_CHAR(p2,'0XXXXXXXXXXXXXXX'),1,8)),'XXXXXXXXXXXXXXXX') "event='library cache: mutex X'" sysdate-1/24 sysdate
+
+
+
+
+ 
+ 
+TOP_LEVEL_SQL_ID
+
+
+select  top_level_Sql_id, module, action, sum(10) ash_Secs
+from dba_hist_Active_Sess_history h
+where sql_id != top_level_sql_id
+group by top_level_sql_id, module, action
+order by ash_Secs desc; 
+/
+
+
+with x as (
+select sql_id, sum(10) ash_Secs
+from dba_hist_active_sess_history
+where top_level_sql_id = 'b6usrg82hwsa3'
+group by sql_id
+)
+select x.* 
+, (select sql_text from dba_hist_sqltext where sql_id = x.sql_id and rownum = 1) sql_text
+from x order by ash_Secs desc;
+ 
+ 
+ 
+ 
+ 
+ 
+Количество процессоров и памяти на сервере: 
+ 
+SET SQLFORMAT ANSICONSOLE
+SET PAGESIZE 10000
+
+SELECT
+  STAT_NAME,
+  DECODE(STAT_NAME,'PHYSICAL_MEMORY_BYTES',(ROUND(VALUE/1024/1024/1024,2))
+  || ' GB','FREE_MEMORY_BYTES',(ROUND(VALUE            /1024/1024/1024,2))
+  || ' GB',VALUE ) VALUE
+FROM
+  v$osstat
+WHERE
+  stat_name IN ( 'FREE_MEMORY_BYTES', 'LOAD', 'NUM_CPUS', 'NUM_CPU_CORES',
+  'NUM_CPU_SOCKETS', 'PHYSICAL_MEMORY_BYTES' ); 
+ 
+ 
+STAT_NAME               VALUE
+--------------------------------- 
+NUM_CPUS                8         
+NUM_CPU_CORES           4         
+NUM_CPU_SOCKETS         1         
+PHYSICAL_MEMORY_BYTES   24 GB     
+FREE_MEMORY_BYTES       16.8 GB 
+ 
+ 
+  
+ 
+ 
+Использование cpu на данный момент:
+ 
+ 
+select  sum(sm.cpu) "CPU", 
+        to_char(sm.session_id) "SID", 
+        to_char(sm.session_serial_num) "SERIAL", 
+        p.spid "OS_PID", s.username "DB_User",
+        s.osuser "OS_User", 
+        s.machine "Machine", 
+        substr(s.module,1,20) "Module"
+   from v$sessmetric sm, v$session s, v$process p
+  where begin_time>sysdate-0.0035 and
+        s.paddr = p.addr(+) 
+    and sm.session_id = s.sid
+  group by sm.session_id, 
+        sm.session_serial_num, 
+        p.spid, 
+        s.username, 
+        s.osuser, 
+        s.machine, 
+        s.module
+ order by cpu desc;
+
+
+
+статистически
+ 
+
+select st.value "DB_CPU_value", 
+       to_char(s.sid) "Sid", 
+       to_char(s.serial#) "Serial", 
+       p.spid "OS_PID", 
+       s.username "DB_User",
+       s.osuser "OS_User", 
+       s.machine "Machine", 
+       s.module "Module", 
+       s.logon_time
+  from v$sess_time_model st, 
+       v$session s, v$process p
+ where stat_name = 'DB CPU' and st.sid = s.sid 
+   and s.paddr = p.addr(+) order by value desc;
