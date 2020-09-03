@@ -1,0 +1,423 @@
+--https://www.oraclerealworld.com/finding_the_slowest_sql_execution_of_the_same_query/index.html
+
+Finding the slowest SQL execution of the same query
+August 28th, 2013Goto commentsLeave a comment
+
+
+
+
+When running the same query multiple times, several questions come to mind:
+
+Does the query always execute in the same amount of  time?
+If some executions are slower, what is the slowest execution time?
+When did the slowest exectution happen?
+What more can I find out about the slowest exectution?
+ 
+
+All of this can be answered from data in Active Session History or ASH.
+
+ 
+
+The following query finds the maximum, minimum and average execution times in seconds as well as the time of the slowest execution which is given by start time and end time of the  slowest exectuiton:
+
+col av for 9999999
+col mx for 9999999
+col mn for 9999999
+
+select
+   sql_id,
+   count(*),
+   round(min(delta),0) mn,
+   round(avg(delta),0) av,
+   round(max(delta),0) mx,
+   substr(max(times),12) max_run_time
+from (
+   select
+        sql_id,
+        sql_exec_id,
+        max(delta) delta ,
+        -- lpad sets a fixed width on delta so it can be
+        -- stripped off above with substr
+        -- delta in "times" is just for sorting not displaying
+        lpad(round(max(delta),0),10) || ' ' ||
+        to_char(min(start_time),'YY-MM-DD HH24:MI:SS')  || ' ' ||
+        to_char(max(end_time),'YY-MM-DD HH24:MI:SS')  times
+   from ( select
+                                            sql_id,
+                                            sql_exec_id,
+              cast(sample_time as date)     end_time,
+              cast(sql_exec_start as date)  start_time,
+              ((cast(sample_time    as date)) -
+               (cast(sql_exec_start as date))) * (3600*24) delta
+
+           from
+              dba_hist_active_sess_history
+           where sql_exec_id is not null
+        )
+   group by sql_id,sql_exec_id
+
+)
+group by sql_id
+having count(*) > 10
+order by mx
+/
+
+SQL_ID          COUNT(*)       MN       AV       MX MAX_RUN_TIME
+------------- ---------- -------- -------- -------- -----------------------------------
+155vjqzjqp58f         27        0      115      786 11-04-11 07:39:47 11-04-11 07:41:20
+7nf5917x3tq5x        113        0      129      791 11-04-11 01:03:19 11-03-02 04:16:09
+asg774pz0kqga         11       11      225      799 11-04-14 12:20:10 11-03-02 12:18:58
+1kf1jsykb1nk6        529        0      107      800 11-04-09 18:41:28 11-03-01 23:13:56
+8rua4c9agcqkb        978        0       73      820 11-03-01 23:13:50 11-03-01 23:13:56
+fdagtr1sdk8tn        313        0      242      841 11-04-08 21:30:31 11-04-08 21:30:38
+7b5w34atn8q1h        124        0       25      898 11-03-07 20:53:17 11-03-07 20:53:23
+9w7mbuv734tfy         11       30      509      954 11-04-14 09:00:55 11-03-02 04:27:33
+88qxmg220db9s         23        4      357     1040 11-04-13 22:08:20 11-04-13 02:20:09
+83ngzw213v0cs        302        1      207     1122 11-04-11 16:26:32 11-03-07 16:12:11
+34cgtc9xkgxny         61      978     1163     1272 11-03-02 10:06:24 11-03-02 10:06:30
+g5u58zpg0tuk8         97        1       62     1359 11-04-13 02:49:33 11-04-12 02:23:39
+6tkqndn1tzf23         29        7      187     1370 11-04-13 06:56:43 11-03-02 06:56:54
+g4wrnvdmf23b1         11       19      458     1397 11-04-14 12:22:28 11-03-02 12:21:19
+bpkg6y9wvf717         31        0      189     1427 11-04-13 21:19:51 11-03-02 21:08:00
+4d6m2q3ngjcv9        320        3      485     1701 11-04-10 18:00:54 11-03-01 23:10:55
+882tp5sbq1tq5         17       39      367     1795 11-04-14 14:00:30 11-03-01 23:04:33
+5k7vccwjr5ahd       2653        0       33     1963 11-04-12 09:06:08 11-03-01 23:10:15
+44034jty9vnrg         19        2      188     1968 11-03-03 09:17:34 11-03-03 09:17:43
+g9n69a23s3wxz         40        6      280     2009 11-04-08 13:47:23 11-03-03 09:37:38
+ds8cz0fb8w147        161       13      274     2531 11-04-12 16:10:21 11-03-01 23:11:55
+bzyny95313u12        114        0       47     2599 11-03-03 03:06:18 11-03-03 03:06:25
+0fvrpk7476b7y         26        0      133     3068 11-03-07 07:57:56 11-03-07 07:58:00
+1pjp66rxcj6tg         15       57      768     3106 11-04-09 17:25:21 11-03-07 08:58:26
+8r5wuxk1dprhr         39       24      841     3510 11-04-14 14:00:47 11-03-02 09:54:37
+0w5uu5kngyyty         21        0      442     3652 11-04-11 08:00:21 11-04-11 09:01:13
+0hbv80w9ypy0n        161        0     1184     4089 11-04-12 22:26:09 11-03-02 04:36:15
+71fwb4n6a92fv         49       30      677     4481 11-04-10 17:01:17 11-03-01 23:40:45
+0bujgc94rg3fj        604        0       25     4929 11-04-08 10:53:34 11-04-08 12:15:43
+64dqhdkkw63fd       1083        0        7     7147 11-03-07 04:01:01 11-03-07 06:00:08
+990m08w8xav7s        591        0       52     7681 11-04-13 00:39:27 11-04-13 00:39:37
+2n5369dsuvn5a         16      303     5727    10472 11-04-14 11:18:11 11-04-14 14:12:43
+2spgk3k0f7quz        251        0      546    29607 11-04-12 12:11:47 11-04-12 12:11:48
+36pd759xym9tc         12     1391    23862    37934 11-04-13 19:25:49 11-03-01 23:00:12
+497wh6n7hu14f         49        0     5498    69438 11-04-12 19:01:17 11-04-13 12:03:54
+We can add a histogram of execution spread to the query
+
+col 1 for 99999
+col 2 for 99999
+col 3 for 9999
+col 4 for 999
+col 5 for 99
+col av for 99999.9
+col ct for 99999
+col mn for 999
+col av for 99999.9
+
+with pivot_data as (
+select
+      sql_id,
+      ct,
+      mxdelta mx,
+      mndelta mn,
+      avdelta av,
+      -- high_boundary is set to maxdelta + 1 so that
+      -- nothing ends up in the overflow bucket
+      -- otherwise the max value ends up in the overflow bucket
+      width_bucket(delta,mndelta,mxdelta+1,5) as bucket  ,
+      substr(times,12) max_run_time
+from (
+select
+   sql_id,
+   delta,
+   count(*) OVER (PARTITION BY sql_id) ct,
+   max(delta) OVER (PARTITION BY sql_id) mxdelta,
+   min(delta) OVER (PARTITION BY sql_id) mndelta,
+   avg(delta) OVER (PARTITION BY sql_id) avdelta,
+   max(times) OVER (PARTITION BY sql_id) times
+from (
+   select
+        sql_id,
+        sql_exec_id,
+        max(delta) delta ,
+        -- lpad sets a fixed width on delta so it can be
+        -- stripped off above with substr
+        -- delta in "times" is just for sorting not displaying
+        lpad(round(max(delta),0),10) || ' ' ||
+        to_char(min(start_time),'YY-MM-DD HH24:MI:SS')  || ' ' ||
+        to_char(max(end_time),'YY-MM-DD HH24:MI:SS')  times
+   from ( select
+                                            sql_id,
+                                            sql_exec_id,
+              cast(sample_time as date)     end_time,
+              cast(sql_exec_start as date)  start_time,
+              ((cast(sample_time    as date)) -
+               (cast(sql_exec_start as date))) * (3600*24) delta
+           from
+              dba_hist_active_sess_history
+           where sql_exec_id is not null
+        )
+   group by sql_id,sql_exec_id
+)
+)
+where ct > &min_repeat_executions_filter
+)
+select * from pivot_data
+PIVOT ( count(*) FOR bucket IN (1,2,3,4,5))
+order by mx,av;
+/
+SQL_ID            CT         MX   MN       AV MAX_RUN_TIME                             1      2     3    4   5
+------------- ------ ---------- ---- -------- ----------------------------------- ------ ------ ----- ---- ---
+8rua4c9agcqkb    978        820    0     72.7 11-03-01 23:13:50 11-03-01 23:13:56    830    116    21    9   2
+fdagtr1sdk8tn    313        841    0    241.8 11-04-08 21:30:31 11-04-08 21:30:38    194     45     0    0  74
+7b5w34atn8q1h    124        898    0     24.8 11-03-07 20:53:17 11-03-07 20:53:23    122      0     0    0   2
+83ngzw213v0cs    302       1122    1    207.5 11-04-11 16:26:32 11-03-07 16:12:11    200     68    21    6   7
+g5u58zpg0tuk8     97       1359    1     62.1 11-04-13 02:49:33 11-04-12 02:23:39     92      3     1    0   1
+4d6m2q3ngjcv9    320       1701    3    484.7 11-04-10 18:00:54 11-03-01 23:10:55     92    168    50    9   1
+5k7vccwjr5ahd   2653       1963    0     33.4 11-04-12 09:06:08 11-03-01 23:10:15   2623     15     8    4   3
+ds8cz0fb8w147    161       2531   13    273.8 11-04-12 16:10:21 11-03-01 23:11:55    136     18     5    1   1
+bzyny95313u12    114       2599    0     46.5 11-03-03 03:06:18 11-03-03 03:06:25    113      0     0    0   1
+0hbv80w9ypy0n    161       4089    0   1183.9 11-04-12 22:26:09 11-03-02 04:36:15     27    116     9    6   3
+71fwb4n6a92fv     49       4481   30    676.9 11-04-10 17:01:17 11-03-01 23:40:45     38      6     2    2   1
+0bujgc94rg3fj    604       4929    0     24.7 11-04-08 10:53:34 11-04-08 12:15:43    601      1     1    0   1
+64dqhdkkw63fd   1083       7147    0      7.2 11-03-07 04:01:01 11-03-07 06:00:08   1082      0     0    0   1
+990m08w8xav7s    591       7681    0     51.8 11-04-13 00:39:27 11-04-13 00:39:37    587      0     0    2   2
+2spgk3k0f7quz    251      29607    0    546.1 11-04-12 12:11:47 11-04-12 12:11:48    247      2     0    0   2
+497wh6n7hu14f     49      69438    0   5498.2 11-04-12 19:01:17 11-04-13 12:03:54     44      1     0    1   3
+Finally add the SQL_EXEC_ID of the longest running execution. This SQL_EXEC_ID can then be used to go look at the events in ASH for that particular execution
+
+ 
+
+col 1 for 99999
+col 2 for 99999
+col 3 for 9999
+col 4 for 999
+col 5 for 99
+col av for 99999
+col ct for 99999
+col mn for 999
+col av for 99999.9
+col longest_sql_exec_id for A10
+
+WITH pivot_data AS (
+SELECT
+      sql_id,
+      ct,
+      mxdelta mx,
+      mndelta mn,
+      round(avdelta) av,
+      WIDTH_BUCKET(delta_in_seconds,mndelta,mxdelta+.1,5) AS bucket  ,
+      SUBSTR(times,12) max_run_time,
+      SUBSTR(longest_sql_exec_id, 12) longest_sql_exec_id
+FROM (
+SELECT
+   sql_id,
+   delta_in_seconds,
+   COUNT(*) OVER (PARTITION BY sql_id) ct,
+   MAX(delta_in_seconds) OVER (PARTITION BY sql_id) mxdelta,
+   MIN(delta_in_seconds) OVER (PARTITION BY sql_id) mndelta,
+   AVG(delta_in_seconds) OVER (PARTITION BY sql_id) avdelta,
+   MAX(times) OVER (PARTITION BY sql_id) times,
+   MAX(longest_sql_exec_id) OVER (PARTITION BY sql_id) longest_sql_exec_id
+FROM (
+   SELECT
+        sql_id,
+        sql_exec_id,
+        MAX(delta_in_seconds) delta_in_seconds ,
+        LPAD(ROUND(MAX(delta_in_seconds),0),10) || ' ' ||
+        TO_CHAR(MIN(start_time),'YY-MM-DD HH24:MI:SS')  || ' ' ||
+        TO_CHAR(MAX(end_time),'YY-MM-DD HH24:MI:SS')  times,
+        LPAD(ROUND(MAX(delta_in_seconds),0),10) || ' ' ||
+        TO_CHAR(MAX(sql_exec_id)) longest_sql_exec_id
+   FROM ( SELECT
+                                            sql_id,
+                                            sql_exec_id,
+              CAST(sample_time AS DATE)     end_time,
+              CAST(sql_exec_start AS DATE)  start_time,
+              ((CAST(sample_time    AS DATE)) -
+               (CAST(sql_exec_start AS DATE))) * (3600*24) delta_in_seconds
+           FROM
+              dba_hist_active_sess_history
+           WHERE sql_exec_id IS NOT NULL
+        )
+   GROUP BY sql_id,sql_exec_id
+)
+)
+where ct > &min_repeat_executions_filter
+ and  mxdelta > &min_elapsed_time
+)
+SELECT * FROM pivot_data
+PIVOT ( COUNT(*) FOR bucket IN (1,2,3,4,5))
+ORDER BY mx DESC,av DESC
+;
+
+SQL_ID            CT         MX   MN       AV MAX_RUN_TIME                        LONGEST_SQ      1      2     3    4   5
+------------- ------ ---------- ---- -------- ----------------------------------- ---------- ------ ------ ----- ---- ---
+2spgk3k0f7quz    251      29607    0    546.0 11-04-12 12:11:47 11-04-12 20:25:14 16781748      247      2     0    0   2
+990m08w8xav7s    591       7681    0     52.0 11-04-13 00:39:27 11-04-13 02:47:28 16786685      587      0     0    2   2
+64dqhdkkw63fd   1083       7147    0      7.0 11-03-07 04:01:01 11-03-07 06:00:08 16777218     1082      0     0    0   1
+0bujgc94rg3fj    604       4929    0     25.0 11-04-08 10:53:34 11-04-08 12:15:43 16814628      601      1     1    0   1
+0hbv80w9ypy0n    161       4089    0   1184.0 11-03-02 04:36:10 11-04-12 23:34:18 16777290       27    116     9    6   3
+bzyny95313u12    114       2599    0     47.0 11-03-03 03:06:18 11-03-03 03:49:37 16781191      113      0     0    0   1
+ds8cz0fb8w147    161       2531   13    274.0 11-03-01 23:11:48 11-04-12 16:10:37 16777285      136     18     5    1   1
+5k7vccwjr5ahd   2653       1963    0     33.0 11-03-01 23:10:12 11-04-12 09:06:12 16778244     2623     15     8    4   3
+4d6m2q3ngjcv9    320       1701    3    485.0 11-03-01 23:10:53 11-04-10 18:01:26 16777261       92    168    50    9   1
+g5u58zpg0tuk8     97       1359    1     62.0 11-04-12 02:23:37 11-04-13 02:51:09 16777217       92      3     1    0   1
+34cgtc9xkgxny     61       1272  978   1163.0 11-03-02 10:06:24 11-03-02 10:27:36 16777250        4      4    14   30   9
+09-02-05-623_950x510
+khailey
+Oracle, performance, sql
+Leave a comment
+Trackbacks
+No trackbacks yet.
+Comments
+
+Vishal Desai
+September 12th, 2013 at 20:34	| #1 Reply | Quote
+Hi Kyle,
+
+Below is the output from one of my database:
+
+SQL_ID CT MX MN AV MAX_RUN_TIME LONGEST_SQ 1 2 3 4 5
+————- —— ———- —- ——– ———————————– ———- —— —— —– —- —
+2ahhqkpm9ywfc 3 6010 430 2438.0 13-03-15 02:50:53 13-09-11 18:07:18 16777216 2 0 0 0 1
+
+Query did not ran for 6 months. SQL_EXEC_ID is not always unique (https://www.blog.tanelpoder.com/2011/10/24/what-the-heck-is-the-sql-execution-id-sql_exec_id/ Please see Coskan and Tanel comments). In my case, I have only 3 distinct SQL_EXEC_ID for 180 executions.
+
+Thanks,
+Vishal
+
+
+khailey
+September 12th, 2013 at 21:03	| #2 Reply | Quote
+Thanks for the link to Tanel’s stuff. From what Tanel is saying the SQL_EXEC_ID will repeat across database bounces and across wraps of the counter. Nothing suprising there.
+It looked like Coskan was saying there were bugs but I didn’t see any confirmation of that – maybe I skimmed the article too fast.
+Does make me wonder if it’s worth adding in SQL_START_ID to the above query in your case and seeing if it helps.
+like this
+
+col 1 for 99999
+col 2 for 99999
+col 3 for 9999
+col 4 for 999
+col 5 for 99
+col av for 99999
+col ct for 99999
+col mn for 999
+col av for 99999.9
+col MAX_RUN_TIME for a32
+col longest_sql_exec_id for A20
+
+WITH pivot_data AS (
+SELECT
+sql_id,
+ct,
+mxdelta mx,
+mndelta mn,
+round(avdelta) av,
+WIDTH_BUCKET(delta_in_seconds,mndelta,mxdelta+.1,5) AS bucket ,
+SUBSTR(times,12) max_run_time,
+SUBSTR(longest_sql_exec_id, 12) longest_sql_exec_id
+FROM (
+SELECT
+sql_id,
+delta_in_seconds,
+COUNT(*) OVER (PARTITION BY sql_id) ct,
+MAX(delta_in_seconds) OVER (PARTITION BY sql_id) mxdelta,
+MIN(delta_in_seconds) OVER (PARTITION BY sql_id) mndelta,
+AVG(delta_in_seconds) OVER (PARTITION BY sql_id) avdelta,
+MAX(times) OVER (PARTITION BY sql_id) times,
+MAX(longest_sql_exec_id) OVER (PARTITION BY sql_id) longest_sql_exec_id
+FROM (
+SELECT
+sql_id,
+sql_exec_id,
+MAX(delta_in_seconds) delta_in_seconds ,
+LPAD(ROUND(MAX(delta_in_seconds),0),10) || ‘ ‘ ||
+TO_CHAR(MIN(start_time),’YY-MM-DD HH24:MI:SS’) || ‘ ‘ ||
+TO_CHAR(MAX(end_time),’YY-MM-DD HH24:MI:SS’) times,
+LPAD(ROUND(MAX(delta_in_seconds),0),10) || ‘ ‘ ||
+TO_CHAR(MAX(sql_exec_id)) longest_sql_exec_id
+FROM ( SELECT
+sql_id,
+to_char(sql_exec_id)||’_’||to_char(sql_exec_start,’J’) sql_exec_id,
+CAST(sample_time AS DATE) end_time,
+CAST(sql_exec_start AS DATE) start_time,
+((CAST(sample_time AS DATE)) -
+(CAST(sql_exec_start AS DATE))) * (3600*24) delta_in_seconds
+FROM
+dba_hist_active_sess_history
+WHERE sql_exec_id IS NOT NULL
+)
+GROUP BY sql_id,sql_exec_id
+)
+)
+where ct > &min_repeat_executions_filter
+and mxdelta > &min_elapsed_time
+)
+SELECT * FROM pivot_data
+PIVOT ( COUNT(*) FOR bucket IN (1,2,3,4,5))
+ORDER BY mx DESC,av DESC
+;
+
+
+Vishal Desai
+September 12th, 2013 at 21:13	| #3 Reply | Quote
+That was it.
+
+SQL_ID CT MX MN AV MAX_RUN_TIME LONGEST_SQL_EXEC_ID 1 2 3 4 5
+————- —— ———- —- ——– ——————————– ——————– —— —— —– —- —
+2ahhqkpm9ywfc 173 6010 29 532.0 13-08-20 01:02:41 13-08-20 02:42 16777216_2456525 161 9 0 2 1
+:51
+
+Thanks for quick response.
+
+
+raj
+September 19th, 2013 at 18:51	| #4 Reply | Quote
+Hi kyle , How do you interpret histogram buckets ? in your example the sqlid 8rua4c9agcqkb has 978 executions and the max elapsed time for that query is 820 seconds and in histogram
+We have 5 buckets and the query ran 830 times <= second and 2 times out of 978 runs ran in 5a seconds. ??
+
+SQL_ID CT MX MN AV MAX_RUN_TIME 1 2 3 4 5
+————- —— ———- —- ——– ———————————– —— —— —– —- —
+8rua4c9agcqkb 978 820 0 72.7 11-03-01 23:13:50 11-03-01 23:13:56 830 116 21 9 2
+
+Thanks
+Raj
+
+
+khailey
+September 19th, 2013 at 21:51	| #5 Reply | Quote
+The histogram buckets 1-5 simply divide the max time into 5 intervals.
+Your max time was 820, so your intervals each of a width of 820/5 = 164
+bucket 1 : 0 -164 with 830 executions
+bucket 2: 165- 328 with 115 executions
+bucket 3: 329 – 492 with 21 executions
+bucket 4: 493- 656 with 9 executions
+bucket 5: 657 – 820 with 2 executions (one of which is the 820 second one)
+
+
+raj
+September 20th, 2013 at 01:27	| #6 Reply | Quote
+Thanks kyle for quick response
+
+
+Sal
+March 15th, 2014 at 04:36	| #7 Reply | Quote
+Hi Kyle :
+
+While this looks good to get the count, max, min time for a query ID.
+
+Is there any way of knowing start time and end time of a particular sql_id :
+
+For example taking your query output / results :
+
+SQL_ID COUNT(*) MN AV MX MAX_RUN_TIME
+————- ———- ——– ——– ——– ———————————–
+155vjqzjqp58f 27 0 115 786 11-04-11 07:39:47 11-04-11 07:41:20
+
+So :
+1) Can i know the start and end times of this SQL_ID which shows as run 27 times.
+2) Obviously along with this, other information like I/O , rows-fetched, cpu time, and also the cost.
+
+
+khailey
+March 15th, 2014 at 07:20	| #8 Reply | Quote
+@Sai: in your example the query has been run 27 times. You could output the start and end for all 27 but that would be a lot of output. The last query above gives the start and end for the longest which is the one I generally find of the most interest.
+You could of course add the I/O, CPU and such for each execution. I haven’t looked into it, but I imagine you could also add the rows fetched and the cost as well. Seems do-able.
