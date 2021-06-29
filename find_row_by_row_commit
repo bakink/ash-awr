@@ -1,0 +1,121 @@
+
+clear columns
+set lines 5000
+set trimspool off
+column PARSING_SCHEMA_NAME format a15
+column SQL format a80 TRUNCATED
+column ELAPSEDTIMEDELTA format a15
+column CPUTIMEDELTA format a15
+column IOWAITDELTA format a15
+column p1 format 9999999999999999999
+column p2text format a20
+column p3text format a20
+column vusername format a18
+column vsidserial format a10
+column vprogram format a25
+column "OBJECT" format a40
+column module format a20 tru
+column BLOCKING_SESSION_STATUS format a11 heading "BLSTATUS"
+column BLOCKING_SESSION format 99999 heading "BLSES"
+column client_id format a20
+column sample_time format a20
+column wait_class format a15
+column module format a20 tru
+column action format a20 tru
+set pagesize 1000
+set feedback on
+set verify off
+
+prompt *
+prompt * Display sql information from AWR repository.
+prompt *
+
+accept HOUR prompt 'Saat [24]:'
+accept VSQL_TEXT CHAR prompt 'SQL [%]:'
+ACCEPT vsqlid CHAR PROMPT 'SQL_ID[%]:'
+
+SELECT /*+ PARALLEL(8) */ *
+FROM (
+SELECT  SNAP.SNAP_ID,SNAP.DBID,SNAP.INSTANCE_NUMBER,
+         TO_CHAR(SNAP.BEGIN_INTERVAL_TIME,'DD/MM/YYYY HH24:MI:SS') BEGIN_INTERVAL_TIME,
+         TO_CHAR(SNAP.END_INTERVAL_TIME,'DD/MM/YYYY HH24:MI:SS') END_INTERVAL_TIME,                                   
+         PARSING_SCHEMA_NAME,
+         TEXT.SQL_ID,
+         PLAN_HASH_VALUE,
+         ROUND((ELAPSED_TIME_DELTA/NVL(DECODE(EXECUTIONS_DELTA,0,1,EXECUTIONS_DELTA),1))/1000)  AVG_ELAPSEDms,         
+        (CASE
+             WHEN TRUNC(ELAPSED_TIME_DELTA/1000000)<60 THEN TO_CHAR(TRUNC(ELAPSED_TIME_DELTA/1000000))||' SEC(S)'
+             WHEN TRUNC(ELAPSED_TIME_DELTA/1000000/60)<60 THEN TO_CHAR(TRUNC(ELAPSED_TIME_DELTA/1000000/60))||' MIN(S)'
+             WHEN TRUNC(ELAPSED_TIME_DELTA/1000000/60/60)<24 THEN TO_CHAR(TRUNC(ELAPSED_TIME_DELTA/1000000/60/60))||'  HOUR(S)'
+             WHEN TRUNC(ELAPSED_TIME_DELTA/1000000/60/60/24)>=1  THEN  TO_CHAR(TRUNC(ELAPSED_TIME_DELTA/1000000/60/60/24))||' DAY(S)'
+         END) AS ELAPSEDTIMEDELTA,
+         EXECUTIONS_DELTA,
+         ROWS_PROCESSED_DELTA,
+         round(EXECUTIONS_DELTA/20/60,2) as EXEC_PER_SEC,
+         EXECUTIONS_TOTAL,
+         ROWS_PROCESSED_TOTAL,         
+         MODULE,
+         ACTION,
+         TEXT.SQL_TEXT TEXT,
+         --SUBSTR(REPLACE(REPLACE(REPLACE(TEXT.SQL_TEXT, CHR(10), ' '), CHR(13), ' '), CHR(9), ' '),1,80) SQL,
+         OPTIMIZER_COST,
+         PARSE_CALLS_DELTA,         
+        (CASE
+             WHEN TRUNC(CPU_TIME_DELTA/1000000)<60 THEN TO_CHAR(TRUNC(CPU_TIME_DELTA/1000000))||' SEC(S)'
+             WHEN TRUNC(CPU_TIME_DELTA/1000000/60)<60 THEN TO_CHAR(TRUNC(CPU_TIME_DELTA/1000000/60))||' MIN(S)'
+             WHEN TRUNC(CPU_TIME_DELTA/1000000/60/60)<24 THEN TO_CHAR(TRUNC(CPU_TIME_DELTA/1000000/60/60))||'  HOUR(S)'
+             WHEN TRUNC(CPU_TIME_DELTA/1000000/60/60/24)>=1  THEN  TO_CHAR(TRUNC(CPU_TIME_DELTA/1000000/60/60/24))||' DAY(S)'
+         END) AS CPUTIMEDELTA,
+         (CASE
+             WHEN TRUNC(IOWAIT_DELTA/1000000)<60 THEN TO_CHAR(TRUNC(IOWAIT_DELTA/1000000))||' SEC(S)'
+             WHEN TRUNC(IOWAIT_DELTA/1000000/60)<60 THEN TO_CHAR(TRUNC(IOWAIT_DELTA/1000000/60))||' MIN(S)'
+             WHEN TRUNC(IOWAIT_DELTA/1000000/60/60)<24 THEN TO_CHAR(TRUNC(IOWAIT_DELTA/1000000/60/60))||'  HOUR(S)'
+             WHEN TRUNC(IOWAIT_DELTA/1000000/60/60/24)>=1  THEN  TO_CHAR(TRUNC(IOWAIT_DELTA/1000000/60/60/24))||' DAY(S)'
+         END) AS IOWAITDELTA,
+         --,DBMS_SQLTUNE.EXTRACT_BINDS(BIND_DATA)
+         round(DISK_READS_DELTA/EXECUTIONS_DELTA) as AVG_DISK_READS_DELTA,
+         round(BUFFER_GETS_DELTA/EXECUTIONS_DELTA) as AVG_BUFFER_GETS_DELTA,
+         round(SORTS_DELTA/EXECUTIONS_DELTA) as AVG_SORTS_DELTA,
+         --FETCHES_DELTA, 
+         DISK_READS_DELTA,
+         BUFFER_GETS_DELTA, 
+         SORTS_DELTA           
+    FROM DBA_HIST_SQLSTAT stat, DBA_HIST_SQLTEXT text, DBA_HIST_SNAPSHOT snap
+   WHERE  STAT.SNAP_ID = SNAP.SNAP_ID AND STAT.INSTANCE_NUMBER=SNAP.INSTANCE_NUMBER AND
+         STAT.SQL_ID = TEXT.SQL_ID AND
+         STAT.EXECUTIONS_DELTA!=0 AND
+         PARSING_SCHEMA_NAME NOT IN ('SYS','SYSTEM','XDB','SYSMAN','DBSNMP','MDSYS','WKSYS') AND
+        --STAT.EXECUTIONS_DELTA>500000 AND
+        TEXT.COMMAND_TYPE IN (2,6,7)  AND  --2 INSERT, 6 UPDATE, 7 DELETE, 3 SELECT
+        --STAT.EXECUTIONS_TOTAL>500000 AND
+        STAT.ROWS_PROCESSED_DELTA/STAT.EXECUTIONS_DELTA<2 AND   --Her dml de bir kayit mi isleniyor.
+        --STAT.ROWS_PROCESSED_TOTAL/STAT.EXECUTIONS_TOTAL < 2 AND   --Her dml de bir kayit mi isleniyor.
+        --TO_NUMBER(TO_CHAR(TRUNC(SYSDATE+8/24,'HH24'),'HH24')) IN (18,19,20,21,21,23,0,1,2,3,4,5,6,7,8)
+        --BETWEEN TIMESTAMP'2021-06-06 00:00:00' and  TIMESTAMP'2021-06-13 00:00:00'  -- tüm hafta  
+        SNAP.END_INTERVAL_TIME BETWEEN TIMESTAMP'2021-06-29 00:30:00' and  TIMESTAMP'2021-06-29 01:45:00'  -- pazartesi   2021/06/21 09:59        
+--ORDER BY STAT.EXECUTIONS_DELTA DESC
+ORDER BY SNAP.BEGIN_INTERVAL_TIME ASC,EXECUTIONS_DELTA DESC
+)
+--WHERE ROWNUM<5000;
+
+select TO_NUMBER(TO_CHAR(TRUNC(SYSDATE+8/24,'HH24'),'HH24')) from dual
+
+
+accept vsqlid char prompt 'Sql id:' 
+
+SELECT PLAN_TABLE_OUTPUT FROM TABLE (DBMS_XPLAN.DISPLAY_AWR('&vsqlid',null,null,'ALL +PEEKED_BINDS'));
+
+/*
+--SELECT PLAN_TABLE_OUTPUT FROM TABLE (DBMS_XPLAN.DISPLAY_AWR('47a6cnh39c30v',null,null,'ALL +PEEKED_BINDS'));
+
+select output from table(DBMS_WORKLOAD_REPOSITORY.awr_report_html((
+                            SELECT dbid FROM v$database),
+                            1, -- instance id
+                            32613, --l_bid      IN NUMBER
+                            32614, --l_eid      IN NUMBER,
+                            null --l_options  IN NUMBER DEFAULT 0
+                            ));
+*/                            
+
+set feedback on
+set verify on
